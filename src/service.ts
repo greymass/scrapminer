@@ -138,7 +138,7 @@ export class ScrapMinerService {
 		const claimJob = new SimpleIntervalJob(
 			{
 				milliseconds: this.options.claimInterval,
-				runImmediately: false // Wait for first sync to complete
+				runImmediately: false // Don't run immediately - wait for initial sync
 			},
 			claimTask,
 			{
@@ -187,6 +187,15 @@ export class ScrapMinerService {
 			this.initClaimScheduler();
 
 			generalLog.info('✅ Service started - monitoring for droplets');
+
+			// If sync runs on startup, trigger an immediate claim check after a short delay
+			// This allows the initial sync to complete first
+			if (SYNC_ON_STARTUP && this.options.useClaimScheduler) {
+				setTimeout(async () => {
+					claimerLog.debug('Running initial claim check after startup sync');
+					await this.runClaimCycle();
+				}, 5000); // 5 second delay to allow sync to complete
+			}
 		} catch (error) {
 			generalLog.error('❌ Startup failed', { error: error.message });
 			throw error;
