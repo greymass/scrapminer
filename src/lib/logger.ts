@@ -13,7 +13,7 @@
  */
 
 import { createLogger, format, transports } from 'winston';
-import { ENVIRONMENT, LOG_LEVEL, SERVICE_ERROR_LOG, SERVICE_INFO_LOG } from '../config';
+import { LOG_LEVEL } from '../config';
 
 const { metadata, combine, timestamp, printf, prettyPrint, label, colorize } = format;
 
@@ -30,46 +30,31 @@ const logformat = printf(({ label, level, message, timestamp, ...rest }) => {
 const isBundled = typeof Bun.main === 'string' && !Bun.main.endsWith('.ts');
 
 if (!isBundled) {
-	if (SERVICE_INFO_LOG) {
-		defaultTransports.push(
-			new transports.File({
-				level: LOG_LEVEL,
-				filename: SERVICE_INFO_LOG,
-				format: logformat
-			})
-		);
-	}
+	// Add file transports with hardcoded paths
+	defaultTransports.push(
+		new transports.File({
+			level: LOG_LEVEL,
+			filename: './logs/scrapminer.log',
+			format: logformat
+		})
+	);
 
-	if (SERVICE_ERROR_LOG) {
-		defaultTransports.push(
-			new transports.File({
-				level: 'error',
-				filename: SERVICE_ERROR_LOG,
-				format: logformat
-			})
-		);
-	}
+	defaultTransports.push(
+		new transports.File({
+			level: 'error',
+			filename: './logs/error.log',
+			format: logformat
+		})
+	);
 }
 
 /**
- * Create a labeled logger instance
- *
- * In development: Pretty-printed with colors
- * In production: JSON format for parsing
+ * Create a labeled logger instance with JSON format
  */
 function makeLogger(labelName: string) {
 	return createLogger({
 		level: LOG_LEVEL,
-		format:
-			ENVIRONMENT === 'development'
-				? combine(
-						label({ label: labelName }),
-						metadata({ key: 'data' }),
-						timestamp(),
-						colorize(),
-						prettyPrint({ colorize: true, depth: 10 })
-					)
-				: combine(label({ label: labelName }), timestamp(), logformat),
+		format: combine(label({ label: labelName }), timestamp(), logformat),
 		transports: defaultTransports
 	});
 }

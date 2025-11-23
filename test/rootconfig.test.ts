@@ -7,26 +7,6 @@
 
 import { describe, test, expect } from 'bun:test';
 
-describe('Root Config: Environment Detection', () => {
-	test('ENVIRONMENT defaults to production', () => {
-		// Import after env is set
-		const originalEnv = process.env.ENVIRONMENT;
-		delete process.env.ENVIRONMENT;
-
-		// Note: We can't easily test the actual import without module reloading
-		// This test documents expected behavior
-		expect(process.env.ENVIRONMENT || 'production').toBe('production');
-
-		// Restore
-		if (originalEnv) process.env.ENVIRONMENT = originalEnv;
-	});
-
-	test('ENVIRONMENT can be overridden', () => {
-		process.env.ENVIRONMENT = 'test';
-		expect(process.env.ENVIRONMENT).toBe('test');
-	});
-});
-
 describe('Root Config: Blockchain Configuration', () => {
 	test('CONTRACT_NAME defaults to "drops"', () => {
 		const originalValue = process.env.CONTRACT_NAME;
@@ -90,15 +70,5 @@ describe('Root Config: Logging Configuration', () => {
 		expect(defaultValue).toBe('info');
 
 		if (originalValue) process.env.LOG_LEVEL = originalValue;
-	});
-
-	test('SERVICE_INFO_LOG has sensible default', () => {
-		const originalValue = process.env.SERVICE_INFO_LOG;
-		delete process.env.SERVICE_INFO_LOG;
-
-		const defaultValue = process.env.SERVICE_INFO_LOG ?? './logs/scrapminer.log';
-		expect(defaultValue).toBe('./logs/scrapminer.log');
-
-		if (originalValue) process.env.SERVICE_INFO_LOG = originalValue;
 	});
 });

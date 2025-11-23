@@ -269,16 +269,16 @@ export class ScrapMinerService {
 				let iteration = 0;
 				while (dropletCache.hasDroplets(account)) {
 					iteration++;
-					const dropletIds = dropletCache.get(account);
+					const droplets = dropletCache.get(account);
 
 					claimerLog.debug('Claiming droplets', {
 						account,
 						iteration,
-						dropletsInCache: dropletIds.length
+						dropletsInCache: droplets.length
 					});
 
 					// Claim droplets (respects CLAIM_BATCH_SIZE and AUTO_RECLAIM)
-					const claimedIds = await claimForAccount(session, dropletIds);
+					const claimedIds = await claimForAccount(session, droplets);
 
 					if (claimedIds.length === 0) {
 						// No droplets were claimed (might be an error or dry run)
@@ -375,7 +375,8 @@ export class ScrapMinerService {
 			await initWebSocket();
 
 			// Sync droplets for account
-			const dropletIds = await syncAccountDroplets(targetAccount, SYNC_TIMEOUT);
+			await syncAccountDroplets(targetAccount, SYNC_TIMEOUT);
+			const droplets = dropletCache.get(targetAccount);
 
 			// Apply filters if specified
 			if (options.revealed || options.unrevealed) {
@@ -385,18 +386,18 @@ export class ScrapMinerService {
 			}
 
 			// Apply limit if specified
-			let outputIds = dropletIds;
-			if (limit > 0 && dropletIds.length > limit) {
-				outputIds = dropletIds.slice(0, limit);
+			let outputDroplets = droplets;
+			if (limit > 0 && droplets.length > limit) {
+				outputDroplets = droplets.slice(0, limit);
 			}
 
 			// Output as JSON
 			const output = {
 				account: targetAccount,
 				timestamp: new Date().toISOString(),
-				count: outputIds.length,
-				total: dropletIds.length,
-				droplets: outputIds
+				count: outputDroplets.length,
+				total: droplets.length,
+				droplets: outputDroplets.map(d => d._id)
 			};
 
 			if (options.pretty) {

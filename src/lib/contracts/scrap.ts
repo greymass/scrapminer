@@ -10,86 +10,86 @@ export namespace Types {
     @Struct.type('account')
     export class account extends Struct {
         @Struct.field(Asset)
-        balance!: Asset
+        declare balance: Asset
     }
     @Struct.type('close')
     export class close extends Struct {
         @Struct.field(Name)
-        owner!: Name
+        declare owner: Name
         @Struct.field(Asset.Symbol)
-        symbol!: Asset.Symbol
+        declare symbol: Asset.Symbol
     }
     @Struct.type('create')
     export class create extends Struct {
         @Struct.field(Name)
-        issuer!: Name
+        declare issuer: Name
         @Struct.field(Asset)
-        maximum_supply!: Asset
+        declare maximum_supply: Asset
     }
     @Struct.type('currency_stats')
     export class currency_stats extends Struct {
         @Struct.field(Asset)
-        supply!: Asset
+        declare supply: Asset
         @Struct.field(Asset)
-        max_supply!: Asset
+        declare max_supply: Asset
         @Struct.field(Name)
-        issuer!: Name
+        declare issuer: Name
     }
     @Struct.type('issue')
     export class issue extends Struct {
         @Struct.field(Name)
-        to!: Name
+        declare to: Name
         @Struct.field(Asset)
-        quantity!: Asset
+        declare quantity: Asset
         @Struct.field('string')
-        memo!: string
+        declare memo: string
     }
     @Struct.type('mint_result')
     export class mint_result extends Struct {
         @Struct.field(UInt64)
-        seed!: UInt64
+        declare seed: UInt64
         @Struct.field(Checksum256)
-        hash!: Checksum256
+        declare hash: Checksum256
     }
     @Struct.type('logmint')
     export class logmint extends Struct {
         @Struct.field(Name)
-        owner!: Name
+        declare owner: Name
         @Struct.field(Asset)
-        minted!: Asset
+        declare minted: Asset
         @Struct.field(UInt64)
-        epoch!: UInt64
+        declare epoch: UInt64
         @Struct.field(Checksum256)
-        hash!: Checksum256
+        declare hash: Checksum256
         @Struct.field(mint_result, {array: true})
-        results!: mint_result[]
+        declare results: mint_result[]
     }
     @Struct.type('open')
     export class open extends Struct {
         @Struct.field(Name)
-        owner!: Name
+        declare owner: Name
         @Struct.field(Asset.Symbol)
-        symbol!: Asset.Symbol
+        declare symbol: Asset.Symbol
         @Struct.field(Name)
-        ram_payer!: Name
+        declare ram_payer: Name
     }
     @Struct.type('retire')
     export class retire extends Struct {
         @Struct.field(Asset)
-        quantity!: Asset
+        declare quantity: Asset
         @Struct.field('string')
-        memo!: string
+        declare memo: string
     }
     @Struct.type('transfer')
     export class transfer extends Struct {
         @Struct.field(Name)
-        from!: Name
+        declare from: Name
         @Struct.field(Name)
-        to!: Name
+        declare to: Name
         @Struct.field(Asset)
-        quantity!: Asset
+        declare quantity: Asset
         @Struct.field('string')
-        memo!: string
+        declare memo: string
     }
 }
 export const TableMap = {

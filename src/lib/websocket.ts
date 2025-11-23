@@ -30,13 +30,21 @@ export interface EpochMessage {
 
 export type WSMessage = DropletMessage | EpochMessage | { command: 'pong' };
 
+export interface Droplet {
+	_id: string;
+	owner: string;
+	bound: boolean;
+	created: string;
+	[key: string]: any;
+}
+
 /**
- * Manages websocket connection to SCRAP API and stores droplet IDs per account
+ * Manages websocket connection to SCRAP API and stores droplets per account
  */
 export class ScrapWebSocket {
 	private ws: WebSocket | null = null;
 	private url: string;
-	private droplets: Map<string, string[]> = new Map();
+	private droplets: Map<string, Droplet[]> = new Map();
 	private reconnectTimer: Timer | null = null;
 	private reconnectDelay = 5000;
 	private onEpochChange?: () => void;
@@ -121,12 +129,12 @@ export class ScrapWebSocket {
 				const msg = message as DropletMessage;
 
 				if (msg.status === 'processed' && msg.droplet) {
-					// Add droplet ID to account's list
+					// Add full droplet object to account's list
 					const account = msg.droplet.owner;
 					if (!this.droplets.has(account)) {
 						this.droplets.set(account, []);
 					}
-					this.droplets.get(account)?.push(msg.droplet._id);
+					this.droplets.get(account)?.push(msg.droplet as Droplet);
 
 					if (msg.count % 100 === 0) {
 						websocketLog.debug('Receiving droplets', { account, count: msg.count });
@@ -226,9 +234,9 @@ export class ScrapWebSocket {
 	}
 
 	/**
-	 * Get cached droplet IDs for an account
+	 * Get cached droplets for an account
 	 */
-	getDroplets(account: string): string[] {
+	getDroplets(account: string): Droplet[] {
 		return this.droplets.get(account) || [];
 	}
 

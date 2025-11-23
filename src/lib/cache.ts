@@ -7,23 +7,31 @@
 
 import { cacheLog } from './logger';
 
+export interface Droplet {
+	_id: string;
+	owner: string;
+	bound: boolean;
+	created: string;
+	[key: string]: any;
+}
+
 /**
- * In-memory cache of droplet IDs per account
+ * In-memory cache of droplets per account
  */
 class DropletCache {
-	private cache: Map<string, string[]> = new Map();
+	private cache: Map<string, Droplet[]> = new Map();
 	private lastSync: Map<string, Date> = new Map();
 
 	/**
 	 * Store droplets for an account
 	 */
-	set(account: string, dropletIds: string[]): void {
-		this.cache.set(account, dropletIds);
+	set(account: string, droplets: Droplet[]): void {
+		this.cache.set(account, droplets);
 		this.lastSync.set(account, new Date());
 
 		cacheLog.info('Cache updated', {
 			account,
-			dropletCount: dropletIds.length,
+			dropletCount: droplets.length,
 			timestamp: new Date().toISOString()
 		});
 	}
@@ -31,7 +39,7 @@ class DropletCache {
 	/**
 	 * Get droplets for an account
 	 */
-	get(account: string): string[] {
+	get(account: string): Droplet[] {
 		return this.cache.get(account) || [];
 	}
 
@@ -40,7 +48,7 @@ class DropletCache {
 	 */
 	remove(account: string, claimedIds: string[]): void {
 		const current = this.cache.get(account) || [];
-		const remaining = current.filter((id) => !claimedIds.includes(id));
+		const remaining = current.filter((droplet) => !claimedIds.includes(droplet._id));
 
 		if (remaining.length === 0) {
 			this.cache.delete(account);

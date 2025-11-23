@@ -9,12 +9,6 @@
 import { isENVTrue } from './lib/utils';
 
 // ============================================================================
-// ENVIRONMENT DETECTION
-// ============================================================================
-
-export const ENVIRONMENT = process.env.ENVIRONMENT ?? 'production';
-
-// ============================================================================
 // BLOCKCHAIN CONFIGURATION
 // ============================================================================
 
@@ -32,7 +26,6 @@ if (!CHAIN_NAME) {
 // ============================================================================
 
 export const SCRAP_API_URL = process.env.SCRAP_API_URL;
-export const USE_WEBSOCKET = isENVTrue(process.env.USE_WEBSOCKET ?? 'true');
 
 if (!SCRAP_API_URL) {
 	throw new Error('SCRAP_API_URL is required in .env');
@@ -62,10 +55,10 @@ export const AUTO_RECLAIM = isENVTrue(process.env.AUTO_RECLAIM ?? 'false');
 export const AUTO_GENERATE = isENVTrue(process.env.AUTO_GENERATE ?? 'false');
 export const BATCH_DELAY = process.env.BATCH_DELAY ? Number(process.env.BATCH_DELAY) : 5000; // milliseconds
 
-// Warn if claims are disabled in production (suppress for sync command)
+// Warn if claims are disabled (suppress for sync command)
 const isSyncCommand = process.argv.includes('sync');
-if (!CLAIM_ENABLED && ENVIRONMENT === 'production' && !isSyncCommand) {
-	console.warn('⚠️  WARNING: Running in production with CLAIM_ENABLED=false (DRY RUN mode)');
+if (!CLAIM_ENABLED && !isSyncCommand) {
+	console.warn('⚠️  WARNING: CLAIM_ENABLED=false (DRY RUN mode - transactions will not be broadcast)');
 }
 
 // ============================================================================
@@ -73,8 +66,6 @@ if (!CLAIM_ENABLED && ENVIRONMENT === 'production' && !isSyncCommand) {
 // ============================================================================
 
 export const LOG_LEVEL = process.env.LOG_LEVEL ?? 'info';
-export const SERVICE_INFO_LOG = process.env.SERVICE_INFO_LOG ?? './logs/scrapminer.log';
-export const SERVICE_ERROR_LOG = process.env.SERVICE_ERROR_LOG ?? './logs/error.log';
 
 // ============================================================================
 // ACCOUNT CONFIGURATION

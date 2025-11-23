@@ -117,3 +117,8 @@ clean/logs: ## Clean log files
 .PHONY: clean/node_modules
 clean/node_modules: ## Clean node_modules
 	rm -rf node_modules
+
+.PHONY: contracts
+contracts: install ## Regenerate contract type definitions from blockchain
+	npx @wharfkit/cli generate --url https://eos.greymass.com --file ./src/lib/contracts/drops.ts drops
+	npx @wharfkit/cli generate --url https://eos.greymass.com --file ./src/lib/contracts/scrap.ts scrap

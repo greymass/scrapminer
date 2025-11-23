@@ -62,7 +62,7 @@ export function closeWebSocket(): void {
  * 3. Wait for all droplets to stream in
  * 4. Store in cache
  */
-export async function syncAccountDroplets(account: string, timeout = 30000): Promise<string[]> {
+export async function syncAccountDroplets(account: string, timeout = 30000): Promise<void> {
 	syncLog.debug('Starting droplet sync', { account, timeout });
 
 	const ws = getWebSocket();
@@ -82,22 +82,20 @@ export async function syncAccountDroplets(account: string, timeout = 30000): Pro
 		const totalCount = await ws.waitForCompletion(account, timeout);
 
 		// Get droplets from websocket cache
-		const dropletIds = ws.getDroplets(account);
+		const droplets = ws.getDroplets(account);
 
 		// Store in cache
-		dropletCache.set(account, dropletIds);
+		dropletCache.set(account, droplets);
 
 		// Only log if droplets found
-		if (dropletIds.length > 0) {
+		if (droplets.length > 0) {
 			syncLog.info('Synced droplets', {
 				account,
-				droplets: dropletIds.length
+				droplets: droplets.length
 			});
 		} else {
 			syncLog.debug('No droplets found', { account });
 		}
-
-		return dropletIds;
 	} catch (error) {
 		syncLog.error('Droplet sync failed', {
 			account,
@@ -120,9 +118,10 @@ export async function syncAllAccounts(sessions: Session[]): Promise<void> {
 		const account = String(session.actor);
 
 		try {
-			const dropletIds = await syncAccountDroplets(account);
-			results[account] = dropletIds.length;
-			totalDroplets += dropletIds.length;
+			await syncAccountDroplets(account);
+			const droplets = dropletCache.get(account);
+			results[account] = droplets.length;
+			totalDroplets += droplets.length;
 
 			// Small delay between accounts to be nice to the API
 			await sleep(2000);
