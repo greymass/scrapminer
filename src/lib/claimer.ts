@@ -146,19 +146,25 @@ async function claimBatch(session: Session, dropletIds: string[], batchNum: numb
 	
 	if (AUTO_GENERATE) {
 		// Generate the same number of unbound droplets that were destroyed
+		// data must be a 32-character hex string for seed generation
+		const timestamp = Date.now().toString(16).padStart(16, '0');
+		const accountHash = session.actor.toString().padEnd(16, '0').slice(0, 16);
+		const data = (timestamp + accountHash).slice(0, 32);
+		
 		const generateAction = dropsContract.action('generate', {
 			owner: session.actor,
 			bound: false, // Always generate unbound (destroyed drops yield SCRAP)
 			amount: UInt32.from(ids.length),
-			data: ''
-			// Note: to_notify is optional, omitting it for now
+			data,
+			to_notify: session.actor // Notify owner about generation
 		});
 		actions.push(generateAction);
 		
 		claimerLog.debug('AUTO_GENERATE enabled - will regenerate droplets', {
 			account,
 			batch: batchNum,
-			droplets: ids.length
+			droplets: ids.length,
+			data
 		});
 	}
 
