@@ -12,7 +12,7 @@ import type { AccountConfig } from './config';
 import { Contract as DropsContract } from './contracts/drops';
 import { Contract as ScrapContract } from './contracts/scrap';
 import { configLog } from './logger';
-import { discoverAccountFromPrivateKey } from './utils';
+import { discoverAccountsFromPrivateKey } from './utils';
 
 // Get chain configuration
 export const chain = Chains[CHAIN_NAME];
@@ -37,10 +37,11 @@ export const scrapContract = new ScrapContract({ client, account: scrapContractN
  * This function:
  * 1. Takes private keys from environment configuration
  * 2. Converts each private key to public key
- * 3. Queries blockchain to discover account/permission pairs
- * 4. Creates Session objects with discovered credentials
+ * 3. Queries blockchain to discover ALL account/permission pairs for each key
+ * 4. Filters to only "claim" permissions
+ * 5. Creates Session objects for all discovered accounts
  *
- * Prefers "claim" permission if available, otherwise uses first discovered permission.
+ * A single private key may control multiple accounts - all will be claimed for.
  */
 export async function createSessions(accounts: AccountConfig[]): Promise<Session[]> {
 	const sessions: Session[] = [];
@@ -48,36 +49,50 @@ export async function createSessions(accounts: AccountConfig[]): Promise<Session
 	for (let i = 0; i < accounts.length; i++) {
 		const account = accounts[i];
 
-		configLog.info('Discovering account from private key', {
-			accountIndex: i + 1
+		configLog.info('Discovering accounts from private key', {
+			keyIndex: i + 1
 		});
 
 		try {
-			// Discover account/permission from private key
-			const discovered = await discoverAccountFromPrivateKey(
+			// Discover ALL accounts/permissions from private key (filtered to "claim" permission)
+			const discoveredAccounts = await discoverAccountsFromPrivateKey(
 				account.privkey,
 				client,
-				'claim' // Prefer "claim" permission if available
+				'claim' // Only use "claim" permissions
 			);
 
-			configLog.info('Account discovered', {
-				accountIndex: i + 1,
-				actor: discovered.actor,
-				permission: discovered.permission,
-				publicKey: discovered.publicKey
+			if (discoveredAccounts.length === 0) {
+				configLog.warn('No accounts with "claim" permission found for private key', {
+					keyIndex: i + 1
+				});
+				continue;
+			}
+
+			configLog.info('Accounts discovered', {
+				keyIndex: i + 1,
+				accountCount: discoveredAccounts.length,
+				accounts: discoveredAccounts.map((acc) => `${acc.actor}@${acc.permission}`)
 			});
 
-			// Create session with discovered credentials
-			const session = new Session({
-				chain,
-				actor: discovered.actor,
-				permission: discovered.permission,
-				walletPlugin: new WalletPluginPrivateKey(account.privkey)
-			});
+			// Create session for each discovered account
+			for (const discovered of discoveredAccounts) {
+				configLog.info('Creating session', {
+					actor: discovered.actor,
+					permission: discovered.permission,
+					publicKey: discovered.publicKey
+				});
 
-			sessions.push(session);
+				const session = new Session({
+					chain,
+					actor: discovered.actor,
+					permission: discovered.permission,
+					walletPlugin: new WalletPluginPrivateKey(account.privkey)
+				});
+
+				sessions.push(session);
+			}
 		} catch (error) {
-			throw new Error(`Failed to create session for ACCOUNT${i + 1}_KEY: ${error.message}`);
+			throw new Error(`Failed to create sessions for PRIVATE_KEY${i + 1}: ${error.message}`);
 		}
 	}
 

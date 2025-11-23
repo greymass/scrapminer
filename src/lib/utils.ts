@@ -42,22 +42,22 @@ export interface DiscoveredAccount {
 }
 
 /**
- * Convert private key to public key and lookup associated accounts/permissions
+ * Convert private key to public key and lookup ALL associated accounts/permissions
  *
  * Uses the /v1/chain/get_accounts_by_authorizers API endpoint to find all
  * account/permission combinations authorized by this private key.
  *
  * @param privkey - Private key in WIF format (e.g., "5K...")
  * @param client - APIClient instance for making blockchain queries
- * @param preferredPermission - Preferred permission name to use if multiple found (default: "claim")
- * @returns Discovered account information
- * @throws Error if no accounts found or API call fails
+ * @param preferredPermission - Filter to only this permission name if provided (e.g., "claim")
+ * @returns Array of all discovered accounts (empty array if none found)
+ * @throws Error if API call fails
  */
-export async function discoverAccountFromPrivateKey(
+export async function discoverAccountsFromPrivateKey(
 	privkey: string,
 	client: APIClient,
-	preferredPermission = 'claim'
-): Promise<DiscoveredAccount> {
+	preferredPermission?: string
+): Promise<DiscoveredAccount[]> {
 	try {
 		// Convert private key to public key
 		const privateKey = PrivateKey.from(privkey);
@@ -69,30 +69,30 @@ export async function discoverAccountFromPrivateKey(
 		});
 
 		if (!response.accounts || response.accounts.length === 0) {
-			throw new Error(`No accounts found for public key ${String(publicKey)}`);
+			console.log(`No accounts found for public key ${String(publicKey)}`);
+			return [];
 		}
 
-		// Try to find preferred permission first
-		const preferred = response.accounts.find(
-			(row) => String(row.permission_name) === preferredPermission
+		// Convert all accounts to DiscoveredAccount format
+		let accounts = response.accounts.map((row) => ({
+			actor: String(row.account_name),
+			permission: String(row.permission_name),
+			publicKey: String(publicKey)
+		}));
+
+		// Filter by preferred permission if specified
+		if (preferredPermission) {
+			accounts = accounts.filter((acc) => acc.permission === preferredPermission);
+		}
+
+		// Log discovered accounts
+		console.log(
+			`Found ${accounts.length} account/permission(s) for key:`,
+			accounts.map((acc) => `${acc.actor}@${acc.permission}`)
 		);
 
-		if (preferred) {
-			return {
-				actor: String(preferred.account_name),
-				permission: String(preferred.permission_name),
-				publicKey: String(publicKey)
-			};
-		}
-
-		// If preferred not found, use the first account
-		const first = response.accounts[0];
-		return {
-			actor: String(first.account_name),
-			permission: String(first.permission_name),
-			publicKey: String(publicKey)
-		};
+		return accounts;
 	} catch (error) {
-		throw new Error(`Failed to discover account from private key: ${error.message}`);
+		throw new Error(`Failed to discover accounts from private key: ${error.message}`);
 	}
 }

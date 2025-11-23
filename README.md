@@ -6,7 +6,8 @@ Automated SCRAP token claimer for multiple accounts. Monitors the SCRAP API and 
 
 - 🔄 **Two-Scheduler Architecture**: Separate sync (hourly) and claim (1-minute) schedulers
 - 💾 **In-Memory Cache**: Efficient droplet storage reduces API calls
-- 🔑 **Auto-Discovery**: Automatically discovers account names and permissions from private keys
+- 🔑 **Auto-Discovery**: Automatically discovers ALL accounts/permissions from private keys
+- 👥 **Multi-Account Support**: Single key claims for all accounts it controls
 - ⚡ **Batch Processing**: Configurable batch sizes for efficient claiming
 - 🔁 **Auto-Reclaim**: Automatically reclaims after generating new drops
 - ♻️ **Auto-Generate**: Maintains constant droplet balance by regenerating after claiming (mirrors scrap-ui)
@@ -246,13 +247,20 @@ Runs sync scheduler without claiming:
 
 ## How It Works
 
-### 1. Account Discovery
+### 1. Account Discovery (Multi-Account Support)
 
-On startup, the private key is used to query the blockchain API to discover:
-- Account name
-- Permission name (e.g., `claimer@claim`)
+On startup, each private key is used to query the blockchain API to discover **ALL** accounts it has access to:
+- Uses `/v1/chain/get_accounts_by_authorizers` API
+- Finds all account/permission pairs the key controls
+- Filters to only "claim" permissions
+- Creates sessions for **ALL** discovered accounts
 
-This eliminates the need to manually configure account names.
+**Example**: If your private key controls both `gm@claim` and `jesta.x@claim`, scrapminer will automatically claim for **BOTH** accounts.
+
+This eliminates the need to:
+- Manually configure account names
+- Run multiple instances for accounts with the same key
+- Track which accounts a key has access to
 
 ### 2. Sync Phase
 
@@ -592,15 +600,28 @@ scrapminer/
 
 ### How do I claim for multiple accounts?
 
-Currently, scrapminer is configured for single-account operation. To run multiple accounts:
+**Built-in multi-account support!** Scrapminer automatically discovers and claims for **ALL** accounts that your private key has access to.
 
-1. Run separate instances with different `.env` files:
+**Example**:
 ```bash
-./scrapminer start  # Uses .env
-DOTENV_CONFIG_PATH=.env.account2 ./scrapminer start
+# Your key controls gm@claim and jesta.x@claim
+PRIVATE_KEY=5K...
+
+# Scrapminer will automatically:
+# - Discover both accounts
+# - Sync droplets for both
+# - Claim for both
+# Result: 2 accounts monitored with 1 private key!
 ```
 
-2. Or modify `src/lib/config.ts` to support `ACCOUNT1_KEY`, `ACCOUNT2_KEY`, etc.
+**For accounts with different keys**, you need separate instances:
+```bash
+# Instance 1 (key A → accounts 1, 2, 3)
+./scrapminer start  # Uses .env with PRIVATE_KEY=keyA
+
+# Instance 2 (key B → accounts 4, 5)
+DOTENV_CONFIG_PATH=.env.keyb ./scrapminer start
+```
 
 ### Can I run this as a systemd service?
 
