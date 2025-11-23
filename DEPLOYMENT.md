@@ -1,105 +1,87 @@
-# Scrapminer Deployment Guide
+# Scrapminer Production Deployment Guide
 
-Production deployment guide for scrapminer.
+## Quick Start (Production)
 
-## Prerequisites
-
-- Linux server (Ubuntu 22.04+ recommended)
-- Bun runtime installed
-- Dedicated user account
-- Firewall configured (outbound HTTPS/WSS only)
-
-## Production Setup
-
-### 1. Create Dedicated User
+### 1. Build Binary
 
 ```bash
-# Create user without login shell
-sudo useradd -r -s /bin/false scrapminer
-
-# Create home directory
-sudo mkdir -p /opt/scrapminer
-sudo chown scrapminer:scrapminer /opt/scrapminer
+make build
+# Creates: ./dist/scrapminer
 ```
 
-### 2. Install Bun
+### 2. Configure Environment
 
 ```bash
-# Install as root/sudo
-curl -fsSL https://bun.sh/install | bash
+# Copy binary to production location
+cp dist/scrapminer /opt/scrapminer/
 
-# Verify installation
-bun --version
-```
-
-### 3. Deploy Application
-
-```bash
-# Build on development machine
-bun build src/index.ts --compile --outfile scrapminer
-
-# Copy to server
-scp scrapminer user@server:/opt/scrapminer/
-
-# Set permissions
-sudo chown scrapminer:scrapminer /opt/scrapminer/scrapminer
-sudo chmod 755 /opt/scrapminer/scrapminer
-```
-
-### 4. Configure Environment
-
-```bash
-# Create .env file
-sudo -u scrapminer vi /opt/scrapminer/.env
-```
-
-**Production .env**:
-
-```bash
-# Chain Configuration (EOS Mainnet)
+# Create production .env
+cat > /opt/scrapminer/.env << 'EOF'
+# Production Configuration
 CHAIN_NAME=EOS
 LEAP_API=https://eos.greymass.com
 CONTRACT_NAME=drops
 SCRAP_CONTRACT=scrap
 
 # SCRAP API (Production)
-SCRAP_API_URL=https://scrap-api.greymass.com
-
-# Account Configuration
-PRIVATE_KEY=5K...  # REPLACE WITH YOUR KEY
+SCRAP_API_URL=wss://scrap-api.greymass.com
 
 # Sync Configuration
-SYNC_INTERVAL=3600000     # 1 hour
+SYNC_INTERVAL=3600000
 SYNC_ON_STARTUP=true
 SYNC_TIMEOUT=30000
 
 # Claim Configuration
-CLAIM_INTERVAL=60000      # 1 minute
+CLAIM_ENABLED=true                 # ⚠️ IMPORTANT: Set to true for production
+CLAIM_INTERVAL=60000
 CLAIM_BATCH_SIZE=2500
 AUTO_RECLAIM=true
+AUTO_GENERATE=true                 # ✅ Maintains constant droplet balance
+BATCH_DELAY=5000
+
+# Your Account
+PRIVATE_KEY=5K...                  # Replace with your claim permission key
 
 # Logging
 LOG_LEVEL=info
+EOF
 ```
 
-**Secure the file**:
+### 3. Test Configuration
 
 ```bash
-sudo chmod 600 /opt/scrapminer/.env
-sudo chown scrapminer:scrapminer /opt/scrapminer/.env
+cd /opt/scrapminer
+./scrapminer config
+# Verify account discovery and settings
 ```
 
-### 5. Create Systemd Service
-
-**Create service file**:
+### 4. Run Once Mode (Test)
 
 ```bash
-sudo vi /etc/systemd/system/scrapminer.service
+# Test with a single claim cycle
+./scrapminer once
+
+# Check logs
+tail -f logs/scrapminer.log
 ```
 
-**Service configuration**:
+### 5. Start Daemon Mode
 
-```ini
+```bash
+# Run in background
+nohup ./scrapminer start > scrapminer.out 2>&1 &
+
+# Or use systemd (see below)
+```
+
+---
+
+## Systemd Service (Recommended)
+
+### Create Service File
+
+```bash
+sudo tee /etc/systemd/system/scrapminer.service > /dev/null << 'EOF'
 [Unit]
 Description=Scrapminer SCRAP Token Claimer
 After=network-online.target
@@ -115,603 +97,489 @@ Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=scrapminer
 
 # Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/scrapminer
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictRealtime=true
-RestrictNamespaces=true
-LockPersonality=true
-MemoryDenyWriteExecute=true
-RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths=/opt/scrapminer/logs
 
 [Install]
 WantedBy=multi-user.target
+EOF
 ```
 
-**Enable and start**:
+### Create Dedicated User
 
 ```bash
-# Reload systemd
+sudo useradd -r -s /bin/false -d /opt/scrapminer scrapminer
+sudo mkdir -p /opt/scrapminer/logs
+sudo chown -R scrapminer:scrapminer /opt/scrapminer
+sudo chmod 600 /opt/scrapminer/.env  # Protect private key
+```
+
+### Enable and Start
+
+```bash
 sudo systemctl daemon-reload
-
-# Enable on boot
 sudo systemctl enable scrapminer
-
-# Start service
 sudo systemctl start scrapminer
+```
 
+### Monitor Service
+
+```bash
 # Check status
 sudo systemctl status scrapminer
-```
 
-## Monitoring
-
-### View Logs
-
-```bash
-# Follow logs in real-time
+# View logs
 sudo journalctl -u scrapminer -f
 
-# View recent logs
-sudo journalctl -u scrapminer -n 100
-
-# View logs since boot
-sudo journalctl -u scrapminer -b
-
-# View logs for specific time range
-sudo journalctl -u scrapminer --since "2 hours ago"
+# View application logs
+sudo tail -f /opt/scrapminer/logs/scrapminer.log
 ```
 
-### Check Service Status
+### Control Service
 
 ```bash
-# Service status
-sudo systemctl status scrapminer
-
-# Is service running?
-sudo systemctl is-active scrapminer
-
-# Is service enabled?
-sudo systemctl is-enabled scrapminer
-```
-
-### Manual Operations
-
-```bash
-# Stop service
 sudo systemctl stop scrapminer
-
-# Restart service
 sudo systemctl restart scrapminer
-
-# Reload configuration (after editing .env)
-sudo systemctl restart scrapminer
-
-# Disable service
-sudo systemctl disable scrapminer
+sudo systemctl disable scrapminer  # Prevent auto-start
 ```
-
-## Health Checks
-
-### Automated Monitoring
-
-**Check script** (`/opt/scrapminer/health-check.sh`):
-
-```bash
-#!/bin/bash
-
-# Check if service is running
-if ! systemctl is-active --quiet scrapminer; then
-    echo "ERROR: Scrapminer service is not running"
-    exit 1
-fi
-
-# Check recent logs for errors
-ERROR_COUNT=$(journalctl -u scrapminer --since "5 minutes ago" | grep -c "level.*error")
-if [ "$ERROR_COUNT" -gt 5 ]; then
-    echo "ERROR: Too many errors in last 5 minutes ($ERROR_COUNT)"
-    exit 1
-fi
-
-# Check recent logs for successful operations
-SUCCESS_COUNT=$(journalctl -u scrapminer --since "1 hour ago" | grep -c "Sync completed\|Claim success")
-if [ "$SUCCESS_COUNT" -eq 0 ]; then
-    echo "WARNING: No successful operations in last hour"
-    exit 1
-fi
-
-echo "OK: Scrapminer is healthy"
-exit 0
-```
-
-**Make executable**:
-
-```bash
-sudo chmod +x /opt/scrapminer/health-check.sh
-```
-
-**Add to cron** (run every 5 minutes):
-
-```bash
-sudo crontab -e
-# Add line:
-*/5 * * * * /opt/scrapminer/health-check.sh || mail -s "Scrapminer Health Check Failed" admin@example.com
-```
-
-### Manual Health Check
-
-```bash
-# Test configuration
-sudo -u scrapminer /opt/scrapminer/scrapminer config
-
-# Run once mode (test without affecting service)
-sudo systemctl stop scrapminer
-sudo -u scrapminer /opt/scrapminer/scrapminer once
-sudo systemctl start scrapminer
-```
-
-## Log Aggregation
-
-### Send Logs to External Service
-
-#### Datadog
-
-Install Datadog agent, then configure:
-
-```yaml
-# /etc/datadog-agent/conf.d/scrapminer.d/conf.yaml
-logs:
-  - type: journald
-    service: scrapminer
-    source: scrapminer
-    include_units:
-      - scrapminer.service
-```
-
-#### Splunk
-
-```bash
-# Forward journald logs
-sudo journalctl -u scrapminer -f -o json | \
-  /opt/splunkforwarder/bin/splunk add oneshot -source /dev/stdin
-```
-
-#### CloudWatch (AWS)
-
-Use CloudWatch agent with journald input:
-
-```json
-{
-  "logs": {
-    "logs_collected": {
-      "journals": {
-        "filters": [{
-          "unit": "scrapminer.service"
-        }]
-      }
-    }
-  }
-}
-```
-
-## Security
-
-### Key Management
-
-**DO NOT store private keys in plain text on production servers.**
-
-Use one of these approaches:
-
-#### AWS Secrets Manager
-
-```bash
-# Store key in AWS
-aws secretsmanager create-secret \
-  --name scrapminer/private-key \
-  --secret-string "5K..."
-
-# Fetch in startup script
-PRIVATE_KEY=$(aws secretsmanager get-secret-value \
-  --secret-id scrapminer/private-key \
-  --query SecretString \
-  --output text)
-```
-
-#### HashiCorp Vault
-
-```bash
-# Store key in Vault
-vault kv put secret/scrapminer private_key="5K..."
-
-# Fetch in startup script
-PRIVATE_KEY=$(vault kv get -field=private_key secret/scrapminer)
-```
-
-#### Encrypted File
-
-```bash
-# Encrypt .env file
-gpg --symmetric --cipher-algo AES256 /opt/scrapminer/.env
-
-# Decrypt on startup
-gpg --quiet --batch --decrypt /opt/scrapminer/.env.gpg > /opt/scrapminer/.env
-```
-
-### Firewall Rules
-
-```bash
-# Only allow outbound HTTPS/WSS
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow out 443/tcp
-sudo ufw enable
-```
-
-### File Permissions
-
-```bash
-# Application binary
-sudo chown root:scrapminer /opt/scrapminer/scrapminer
-sudo chmod 750 /opt/scrapminer/scrapminer
-
-# Environment file (contains private key)
-sudo chown scrapminer:scrapminer /opt/scrapminer/.env
-sudo chmod 400 /opt/scrapminer/.env
-
-# Directory
-sudo chown scrapminer:scrapminer /opt/scrapminer
-sudo chmod 750 /opt/scrapminer
-```
-
-## Updating
-
-### Rolling Update (Zero Downtime)
-
-```bash
-# Build new binary
-bun build src/index.ts --compile --outfile scrapminer
-
-# Upload to server
-scp scrapminer user@server:/tmp/scrapminer-new
-
-# Stop service
-sudo systemctl stop scrapminer
-
-# Replace binary
-sudo mv /tmp/scrapminer-new /opt/scrapminer/scrapminer
-sudo chown scrapminer:scrapminer /opt/scrapminer/scrapminer
-sudo chmod 755 /opt/scrapminer/scrapminer
-
-# Start service
-sudo systemctl start scrapminer
-
-# Verify
-sudo systemctl status scrapminer
-sudo journalctl -u scrapminer -f
-```
-
-### Configuration Update
-
-```bash
-# Edit configuration
-sudo -u scrapminer vi /opt/scrapminer/.env
-
-# Restart service to apply
-sudo systemctl restart scrapminer
-
-# Verify new configuration
-sudo journalctl -u scrapminer -n 50 | grep "Starting scrapminer"
-```
-
-## Backup
-
-### What to Backup
-
-- `/opt/scrapminer/.env` - Configuration (contains private key!)
-- Service logs (if needed for compliance)
-
-**DO NOT backup**:
-- Binary (can be rebuilt)
-- Cache (in-memory only)
-
-### Backup Script
-
-```bash
-#!/bin/bash
-
-# Backup configuration
-BACKUP_DIR="/backup/scrapminer/$(date +%Y%m%d)"
-mkdir -p "$BACKUP_DIR"
-
-# Copy .env (encrypted)
-gpg --symmetric --cipher-algo AES256 \
-  -o "$BACKUP_DIR/env.gpg" \
-  /opt/scrapminer/.env
-
-# Set permissions
-chmod 600 "$BACKUP_DIR/env.gpg"
-```
-
-## Troubleshooting
-
-### Service Won't Start
-
-```bash
-# Check service status
-sudo systemctl status scrapminer
-
-# Check recent logs
-sudo journalctl -u scrapminer -n 100
-
-# Check configuration
-sudo -u scrapminer /opt/scrapminer/scrapminer config
-
-# Test manually
-sudo -u scrapminer /opt/scrapminer/scrapminer once
-```
-
-### No Claims Happening
-
-```bash
-# Check if syncing
-sudo journalctl -u scrapminer | grep "Sync completed"
-
-# Check cache status (run once mode)
-sudo systemctl stop scrapminer
-sudo -u scrapminer /opt/scrapminer/scrapminer once
-# Look for "droplets" count in logs
-
-# Verify account has droplets
-curl "https://scrap-api.greymass.com/get/droplets?account=YOURACCOUNTNAME"
-```
-
-### High Memory Usage
-
-```bash
-# Check current memory
-ps aux | grep scrapminer
-
-# Add memory limit to service
-sudo systemctl edit scrapminer
-# Add:
-[Service]
-MemoryMax=512M
-MemoryHigh=400M
-
-# Reload and restart
-sudo systemctl daemon-reload
-sudo systemctl restart scrapminer
-```
-
-### WebSocket Timeouts
-
-```bash
-# Increase timeout
-sudo -u scrapminer vi /opt/scrapminer/.env
-# Set: SYNC_TIMEOUT=60000
-
-# Restart
-sudo systemctl restart scrapminer
-```
-
-## Performance Tuning
-
-### High-Frequency Claiming
-
-For accounts that generate many drops:
-
-```bash
-SYNC_INTERVAL=600000      # Sync every 10 minutes
-CLAIM_INTERVAL=30000      # Claim every 30 seconds
-CLAIM_BATCH_SIZE=5000     # Larger batches
-```
-
-### Low-Frequency Claiming
-
-For accounts with few drops:
-
-```bash
-SYNC_INTERVAL=7200000     # Sync every 2 hours
-CLAIM_INTERVAL=300000     # Claim every 5 minutes
-CLAIM_BATCH_SIZE=1000     # Smaller batches
-```
-
-### Resource Limits
-
-Add to systemd service:
-
-```ini
-[Service]
-# CPU limit (50% of one core)
-CPUQuota=50%
-
-# Memory limit
-MemoryMax=512M
-MemoryHigh=400M
-
-# Task limit
-TasksMax=10
-```
-
-## Multi-Account Deployment
-
-To run multiple accounts on one server:
-
-### Option 1: Multiple Service Instances
-
-```bash
-# Create separate directories
-sudo mkdir -p /opt/scrapminer/account1
-sudo mkdir -p /opt/scrapminer/account2
-
-# Copy binary and .env to each
-sudo cp /opt/scrapminer/scrapminer /opt/scrapminer/account1/
-sudo cp /opt/scrapminer/scrapminer /opt/scrapminer/account2/
-
-# Create separate service files
-sudo cp /etc/systemd/system/scrapminer.service \
-        /etc/systemd/system/scrapminer-account1.service
-
-# Edit each service to use different WorkingDirectory
-# Start both services
-sudo systemctl enable scrapminer-account1
-sudo systemctl enable scrapminer-account2
-sudo systemctl start scrapminer-account1
-sudo systemctl start scrapminer-account2
-```
-
-### Option 2: Modify for Multi-Account
-
-Modify `src/lib/config.ts` to support multiple accounts:
-
-```typescript
-export function loadAccounts(): AccountConfig[] {
-  const accounts: AccountConfig[] = []
-  let i = 1
-  
-  while (process.env[`ACCOUNT${i}_KEY`]) {
-    accounts.push({
-      privkey: process.env[`ACCOUNT${i}_KEY`]!
-    })
-    i++
-  }
-  
-  return accounts
-}
-```
-
-Then in `.env`:
-
-```bash
-ACCOUNT1_KEY=5K...
-ACCOUNT2_KEY=5K...
-ACCOUNT3_KEY=5K...
-```
-
-## Alerts
-
-### PagerDuty Integration
-
-```bash
-# Install PagerDuty agent
-curl -O https://packages.pagerduty.com/pdagent/pd-agent.deb
-sudo dpkg -i pd-agent.deb
-
-# Configure monitoring script
-#!/bin/bash
-if ! /opt/scrapminer/health-check.sh; then
-    pd-send -k YOUR_INTEGRATION_KEY \
-            -t trigger \
-            -d "Scrapminer health check failed"
-fi
-```
-
-### Slack Notifications
-
-```bash
-# Add to health check script
-SLACK_WEBHOOK="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-
-if ! /opt/scrapminer/health-check.sh; then
-    curl -X POST "$SLACK_WEBHOOK" \
-         -H 'Content-Type: application/json' \
-         -d '{"text":"Scrapminer health check failed"}'
-fi
-```
-
-## Cost Optimization
-
-### CPU Credits (AWS t2/t3)
-
-Monitor CPU usage to avoid credit exhaustion:
-
-```bash
-# Check current CPU
-top -b -n 1 | grep scrapminer
-
-# If using >20% consistently, upgrade instance or reduce frequency
-```
-
-### Network Costs
-
-Scrapminer uses minimal bandwidth:
-- WebSocket sync: ~1KB per account per hour
-- Blockchain transactions: ~500 bytes per claim
-
-Estimated monthly bandwidth: <100MB per account
-
-### Compute Costs
-
-Recommended instance sizes:
-- **AWS**: t3.micro (1-5 accounts), t3.small (5-20 accounts)
-- **DigitalOcean**: Basic Droplet $6/month (unlimited accounts)
-- **Hetzner**: CX11 €4/month (unlimited accounts)
-
-## Compliance
-
-### Logging Retention
-
-For compliance, retain logs:
-
-```bash
-# Set journald retention
-sudo vi /etc/systemd/journald.conf
-# Set:
-SystemMaxUse=2G
-SystemMaxFileSize=100M
-SystemMaxFiles=100
-
-# Reload journald
-sudo systemctl restart systemd-journald
-```
-
-### Audit Trail
-
-Enable detailed logging:
-
-```bash
-LOG_LEVEL=debug  # Log all operations
-```
-
-Export logs regularly:
-
-```bash
-# Export last 30 days
-journalctl -u scrapminer --since "30 days ago" > scrapminer-audit-$(date +%Y%m).log
-```
-
-## Production Checklist
-
-- [ ] Dedicated user created (`scrapminer`)
-- [ ] Application deployed to `/opt/scrapminer`
-- [ ] `.env` file configured and secured (400 permissions)
-- [ ] systemd service created and enabled
-- [ ] Service starts without errors
-- [ ] Logs show successful sync and claim operations
-- [ ] Health check script deployed
-- [ ] Monitoring/alerting configured
-- [ ] Firewall rules applied
-- [ ] Backup strategy implemented
-- [ ] Documentation updated with server details
-- [ ] Private key secured (not in plain text if possible)
-- [ ] Service auto-starts on reboot
-
-## Support
-
-For production issues:
-1. Check logs: `sudo journalctl -u scrapminer -n 100`
-2. Run health check: `/opt/scrapminer/health-check.sh`
-3. Test configuration: `sudo -u scrapminer /opt/scrapminer/scrapminer config`
-4. Review this guide for troubleshooting steps
 
 ---
 
-**Last Updated**: 2025-01-23
+## Configuration Profiles
+
+### Profile 1: Aggressive Claiming (Recommended)
+
+**Goal**: Maximum claiming speed, maintain droplet balance
+
+```bash
+CLAIM_ENABLED=true
+CLAIM_INTERVAL=60000           # Check every 1 minute
+CLAIM_BATCH_SIZE=2500          # Max batch size
+AUTO_RECLAIM=true              # Claim newly generated droplets
+AUTO_GENERATE=true             # Maintain constant balance
+BATCH_DELAY=5000               # 5s between batches
+SYNC_INTERVAL=3600000          # Sync hourly
+```
+
+**Best for**: Accounts with high droplet generation, want to maximize SCRAP claiming
+
+### Profile 2: Conservative Claiming
+
+**Goal**: Reduce transaction frequency, preserve droplets
+
+```bash
+CLAIM_ENABLED=true
+CLAIM_INTERVAL=300000          # Check every 5 minutes
+CLAIM_BATCH_SIZE=1000          # Smaller batches
+AUTO_RECLAIM=false             # Don't claim generated drops automatically
+AUTO_GENERATE=false            # Let droplet count decrease
+BATCH_DELAY=10000              # 10s between batches
+SYNC_INTERVAL=7200000          # Sync every 2 hours
+```
+
+**Best for**: Low priority accounts, want fewer blockchain transactions
+
+### Profile 3: Balanced Claiming
+
+**Goal**: Balance between claiming speed and transaction frequency
+
+```bash
+CLAIM_ENABLED=true
+CLAIM_INTERVAL=180000          # Check every 3 minutes
+CLAIM_BATCH_SIZE=2500          # Max batch size
+AUTO_RECLAIM=true              # Claim generated drops
+AUTO_GENERATE=false            # Let balance decrease over time
+BATCH_DELAY=5000               # 5s between batches
+SYNC_INTERVAL=3600000          # Sync hourly
+```
+
+**Best for**: Normal use, claim regularly but don't maintain constant droplet count
+
+---
+
+## Monitoring & Alerts
+
+### Key Metrics to Monitor
+
+1. **Claim Success Rate**: Should be >95%
+2. **Sync Failures**: Should be 0
+3. **Average Claim Time**: <10 seconds per batch
+4. **Droplet Balance**: Stable (if AUTO_GENERATE=true)
+5. **Transaction Errors**: Monitor for authority/CPU errors
+
+### Log Patterns to Alert On
+
+```bash
+# No successful claims in last hour
+grep -c "Claim successful" logs/scrapminer.log | awk '$1 == 0'
+
+# Authority errors (permission issue)
+grep "insufficient authority" logs/error.log
+
+# Websocket connection failures
+grep "WebSocket error" logs/error.log
+
+# Scheduler stopped
+grep "Scheduler stopped" logs/scrapminer.log
+```
+
+### Health Check Script
+
+```bash
+#!/bin/bash
+# /opt/scrapminer/health-check.sh
+
+LOG_FILE="/opt/scrapminer/logs/scrapminer.log"
+ERROR_FILE="/opt/scrapminer/logs/error.log"
+ALERT_EMAIL="admin@example.com"
+
+# Check if process is running
+if ! pgrep -f "scrapminer start" > /dev/null; then
+    echo "ERROR: Scrapminer process not running" | mail -s "Scrapminer Alert" $ALERT_EMAIL
+    exit 1
+fi
+
+# Check for recent activity (last 10 minutes)
+if ! find $LOG_FILE -mmin -10 | grep -q .; then
+    echo "WARNING: No log activity in last 10 minutes" | mail -s "Scrapminer Alert" $ALERT_EMAIL
+fi
+
+# Check for errors in last hour
+ERROR_COUNT=$(grep -c "ERROR" $ERROR_FILE | tail -100)
+if [ $ERROR_COUNT -gt 5 ]; then
+    echo "WARNING: $ERROR_COUNT errors in last 100 lines" | mail -s "Scrapminer Alert" $ALERT_EMAIL
+fi
+```
+
+### Cron Health Check
+
+```bash
+# Add to crontab: crontab -e
+*/10 * * * * /opt/scrapminer/health-check.sh
+```
+
+---
+
+## Troubleshooting Production Issues
+
+### Issue: Service Won't Start
+
+**Check logs**:
+```bash
+sudo journalctl -u scrapminer -n 50
+```
+
+**Common causes**:
+- Missing `.env` file
+- Invalid private key
+- Wrong file permissions
+- Port conflicts
+
+**Solutions**:
+```bash
+# Verify .env exists
+ls -la /opt/scrapminer/.env
+
+# Test binary directly
+cd /opt/scrapminer
+sudo -u scrapminer ./scrapminer config
+
+# Check permissions
+sudo chown -R scrapminer:scrapminer /opt/scrapminer
+sudo chmod 600 /opt/scrapminer/.env
+```
+
+### Issue: No Claims Happening
+
+**Symptoms**: Service running but no transactions
+
+**Check**:
+```bash
+# 1. Verify CLAIM_ENABLED=true
+grep CLAIM_ENABLED /opt/scrapminer/.env
+
+# 2. Check cache has droplets
+tail -f /opt/scrapminer/logs/scrapminer.log | grep "dropletCount"
+
+# 3. Verify sync is working
+tail -f /opt/scrapminer/logs/scrapminer.log | grep "Sync completed"
+
+# 4. Check account has droplets at scrapload.io
+```
+
+**Solutions**:
+```bash
+# Force a sync
+sudo systemctl restart scrapminer
+
+# Run once mode to debug
+cd /opt/scrapminer
+sudo -u scrapminer ./scrapminer once
+```
+
+### Issue: Transaction Failures
+
+**Symptoms**: "Claim failed" errors in logs
+
+**Check error type**:
+```bash
+tail -f /opt/scrapminer/logs/error.log
+```
+
+**Common errors**:
+
+1. **"insufficient authority"**
+   - Private key doesn't match claim permission
+   - Permission not linked to destroy/generate actions
+   - Solution: Run `./scrapminer setup` to generate permission setup URL
+
+2. **"CPU usage exceeded"**
+   - Batch size too large
+   - Solution: Reduce `CLAIM_BATCH_SIZE` to 1000
+
+3. **"datastream attempted to read past the end"**
+   - Contract types out of date
+   - Solution: Run `make contracts` to regenerate
+
+### Issue: High Memory Usage
+
+**Check memory**:
+```bash
+ps aux | grep scrapminer
+```
+
+**If memory is high**:
+- Check cache size in logs
+- Reduce `SYNC_INTERVAL` (sync less frequently)
+- Restart service to clear cache
+
+### Issue: Websocket Disconnections
+
+**Symptoms**: "WebSocket error" in logs
+
+**Solutions**:
+```bash
+# Increase timeout
+echo "SYNC_TIMEOUT=60000" >> /opt/scrapminer/.env
+
+# Verify API is reachable
+curl -I https://scrap-api.greymass.com
+
+# Restart service
+sudo systemctl restart scrapminer
+```
+
+---
+
+## Backup & Recovery
+
+### Backup Configuration
+
+```bash
+# Backup .env (contains private key!)
+sudo tar czf scrapminer-backup-$(date +%Y%m%d).tar.gz \
+    /opt/scrapminer/.env \
+    /opt/scrapminer/logs
+
+# Store securely
+sudo mv scrapminer-backup-*.tar.gz /secure/backup/location/
+```
+
+### Restore Configuration
+
+```bash
+# Extract backup
+sudo tar xzf scrapminer-backup-20251123.tar.gz -C /
+
+# Fix permissions
+sudo chown -R scrapminer:scrapminer /opt/scrapminer
+sudo chmod 600 /opt/scrapminer/.env
+
+# Restart service
+sudo systemctl restart scrapminer
+```
+
+---
+
+## Security Checklist
+
+- [ ] Using dedicated `claim` permission (NOT `active` or `owner`)
+- [ ] Private key stored in `.env` with `600` permissions
+- [ ] Service runs as non-root user (`scrapminer`)
+- [ ] `.env` file is in `.gitignore` and not committed
+- [ ] Binary verified with `./scrapminer config` before starting
+- [ ] Systemd hardening options enabled (`ProtectSystem`, `PrivateTmp`)
+- [ ] Log files only writable by `scrapminer` user
+- [ ] Monitoring alerts configured for errors
+
+---
+
+## Performance Tuning
+
+### For High-Volume Accounts (>10,000 droplets)
+
+```bash
+# Increase batch size
+CLAIM_BATCH_SIZE=2500
+
+# Reduce claim interval (claim more frequently)
+CLAIM_INTERVAL=30000  # 30 seconds
+
+# Increase sync timeout for large datasets
+SYNC_TIMEOUT=60000  # 60 seconds
+
+# Enable auto-reclaim for continuous processing
+AUTO_RECLAIM=true
+```
+
+### For Low-Volume Accounts (<1,000 droplets)
+
+```bash
+# Smaller batches
+CLAIM_BATCH_SIZE=1000
+
+# Less frequent checking
+CLAIM_INTERVAL=300000  # 5 minutes
+
+# Sync less often
+SYNC_INTERVAL=7200000  # 2 hours
+```
+
+### For RAM-Constrained Systems
+
+```bash
+# Reduce sync frequency (smaller cache)
+SYNC_INTERVAL=7200000  # 2 hours
+
+# Disable auto-generate if not needed
+AUTO_GENERATE=false
+
+# Smaller batches
+CLAIM_BATCH_SIZE=1000
+```
+
+---
+
+## Updating to New Version
+
+### 1. Build New Binary
+
+```bash
+cd /path/to/scrapminer/source
+git pull
+make build
+```
+
+### 2. Stop Service
+
+```bash
+sudo systemctl stop scrapminer
+```
+
+### 3. Backup Current Binary
+
+```bash
+sudo cp /opt/scrapminer/scrapminer /opt/scrapminer/scrapminer.backup
+```
+
+### 4. Replace Binary
+
+```bash
+sudo cp dist/scrapminer /opt/scrapminer/
+sudo chown scrapminer:scrapminer /opt/scrapminer/scrapminer
+sudo chmod +x /opt/scrapminer/scrapminer
+```
+
+### 5. Test Configuration
+
+```bash
+cd /opt/scrapminer
+sudo -u scrapminer ./scrapminer config
+```
+
+### 6. Start Service
+
+```bash
+sudo systemctl start scrapminer
+sudo systemctl status scrapminer
+```
+
+### 7. Monitor Logs
+
+```bash
+sudo journalctl -u scrapminer -f
+```
+
+---
+
+## Multi-Account Setup
+
+To run scrapminer for multiple accounts:
+
+### Option 1: Multiple Instances (Recommended)
+
+```bash
+# Account 1
+mkdir -p /opt/scrapminer/account1
+cp dist/scrapminer /opt/scrapminer/account1/
+cp .env /opt/scrapminer/account1/.env
+# Edit .env with account1 private key
+
+# Account 2
+mkdir -p /opt/scrapminer/account2
+cp dist/scrapminer /opt/scrapminer/account2/
+cp .env /opt/scrapminer/account2/.env
+# Edit .env with account2 private key
+
+# Create separate systemd services
+sudo cp /etc/systemd/system/scrapminer.service /etc/systemd/system/scrapminer-account1.service
+sudo cp /etc/systemd/system/scrapminer.service /etc/systemd/system/scrapminer-account2.service
+
+# Edit WorkingDirectory in each service file
+sudo vim /etc/systemd/system/scrapminer-account1.service
+# WorkingDirectory=/opt/scrapminer/account1
+
+sudo systemctl daemon-reload
+sudo systemctl enable scrapminer-account1 scrapminer-account2
+sudo systemctl start scrapminer-account1 scrapminer-account2
+```
+
+### Option 2: Single Binary, Multiple Configs
+
+```bash
+# Run with different config files
+DOTENV_CONFIG_PATH=/opt/scrapminer/account1.env ./scrapminer start &
+DOTENV_CONFIG_PATH=/opt/scrapminer/account2.env ./scrapminer start &
+```
+
+---
+
+## Production Checklist
+
+Before deploying to production:
+
+- [ ] Built binary with `make build`
+- [ ] Tested with `./scrapminer once` in dry-run mode (`CLAIM_ENABLED=false`)
+- [ ] Verified account discovery with `./scrapminer config`
+- [ ] Set `CLAIM_ENABLED=true` for production
+- [ ] Configured AUTO_GENERATE based on strategy (true to maintain balance)
+- [ ] Created systemd service file
+- [ ] Set up dedicated user with proper permissions
+- [ ] Configured monitoring and alerts
+- [ ] Tested service start/stop/restart
+- [ ] Verified logs are being written correctly
+- [ ] Documented any custom configuration
+- [ ] Backed up `.env` file securely
+- [ ] Set up log rotation (if needed)
+- [ ] Tested recovery procedure
+
+---
+
+**Ready to deploy!** 🚀
+
+For questions or issues, see the main [README.md](./README.md) or check logs at `/opt/scrapminer/logs/`.
