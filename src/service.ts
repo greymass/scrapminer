@@ -61,7 +61,7 @@ export class ScrapMinerService {
 			return;
 		}
 
-		generalLog.info('Initializing sessions and discovering accounts from private keys');
+		generalLog.debug('Initializing sessions and discovering accounts from private keys');
 		this.sessions = await createSessions(this.accounts);
 		this.initialized = true;
 	}
@@ -75,10 +75,9 @@ export class ScrapMinerService {
 		}
 
 		try {
-			syncLog.info('Starting sync cycle');
 			await syncAllAccounts(this.sessions);
 		} catch (error) {
-			syncLog.error('Sync cycle failed', { error: error.message });
+			syncLog.error('Sync failed', { error: error.message });
 		}
 	}
 
@@ -91,10 +90,9 @@ export class ScrapMinerService {
 		}
 
 		try {
-			claimerLog.info('Starting claim cycle');
 			await claimFromCache(this.sessions);
 		} catch (error) {
-			claimerLog.error('Claim cycle failed', { error: error.message });
+			claimerLog.error('Claim failed', { error: error.message });
 		}
 	}
 
@@ -121,7 +119,7 @@ export class ScrapMinerService {
 		);
 
 		this.syncScheduler.addSimpleIntervalJob(syncJob);
-		syncLog.info('Sync scheduler started', {
+		syncLog.debug('Sync scheduler started', {
 			interval: this.options.syncInterval,
 			intervalMinutes: this.options.syncInterval / 1000 / 60
 		});
@@ -150,7 +148,7 @@ export class ScrapMinerService {
 		);
 
 		this.claimScheduler.addSimpleIntervalJob(claimJob);
-		claimerLog.info('Claim scheduler started', {
+		claimerLog.debug('Claim scheduler started', {
 			interval: this.options.claimInterval,
 			intervalSeconds: this.options.claimInterval / 1000
 		});
@@ -160,14 +158,10 @@ export class ScrapMinerService {
 	 * Start the service with two independent schedulers
 	 */
 	async start(): Promise<void> {
-		generalLog.info('Scrapminer starting up', {
-			accountCount: this.accounts.length,
-			syncInterval: this.options.syncInterval,
-			claimInterval: this.options.claimInterval,
-			useSyncScheduler: this.options.useSyncScheduler,
-			useClaimScheduler: this.options.useClaimScheduler,
-			apiUrl: SCRAP_API_URL,
-			syncTimeout: SYNC_TIMEOUT
+		generalLog.info('🚀 Scrapminer starting', {
+			accounts: this.accounts.length,
+			syncInterval: `${this.options.syncInterval / 60000}min`,
+			claimInterval: `${this.options.claimInterval / 1000}s`
 		});
 
 		try {
@@ -176,11 +170,9 @@ export class ScrapMinerService {
 
 			// Log discovered accounts
 			if (this.sessions) {
-				generalLog.info('Discovered accounts', {
-					accounts: this.sessions.map((s) => ({
-						actor: String(s.actor),
-						permission: String(s.permission)
-					}))
+				const accounts = this.sessions.map((s) => `${String(s.actor)}@${String(s.permission)}`);
+				generalLog.info(`📋 Monitoring ${accounts.length} account${accounts.length > 1 ? 's' : ''}`, {
+					accounts
 				});
 			}
 
@@ -194,14 +186,9 @@ export class ScrapMinerService {
 			// Initialize claim scheduler (1-minute cache check)
 			this.initClaimScheduler();
 
-			generalLog.info('Scrapminer service started successfully', {
-				schedulers: {
-					sync: !!this.syncScheduler,
-					claim: !!this.claimScheduler
-				}
-			});
+			generalLog.info('✅ Service started - monitoring for droplets');
 		} catch (error) {
-			generalLog.error('Startup failed', { error: error.message });
+			generalLog.error('❌ Startup failed', { error: error.message });
 			throw error;
 		}
 	}
@@ -210,23 +197,23 @@ export class ScrapMinerService {
 	 * Stop the service and cleanup resources
 	 */
 	async stop(): Promise<void> {
-		generalLog.info('Stopping Scrapminer service');
+		generalLog.info('🛑 Stopping service');
 
 		if (this.syncScheduler) {
 			this.syncScheduler.stop();
-			syncLog.info('Sync scheduler stopped');
+			syncLog.debug('Sync scheduler stopped');
 		}
 
 		if (this.claimScheduler) {
 			this.claimScheduler.stop();
-			claimerLog.info('Claim scheduler stopped');
+			claimerLog.debug('Claim scheduler stopped');
 		}
 
 		// Close websocket connection
 		const { closeWebSocket } = await import('./lib/sync');
 		closeWebSocket();
 
-		generalLog.info('Scrapminer service stopped');
+		generalLog.info('👋 Service stopped');
 	}
 
 	/**
@@ -238,7 +225,7 @@ export class ScrapMinerService {
 	 * 3. Continue until all accounts have 0 droplets in cache
 	 */
 	static async runOnce(): Promise<void> {
-		generalLog.info('Running once mode: sync and claim all droplets until complete');
+		generalLog.info('🎯 Once mode: sync and claim all droplets');
 
 		// Create service without schedulers
 		const service = new ScrapMinerService({
@@ -263,11 +250,10 @@ export class ScrapMinerService {
 		// Process each account sequentially
 		for (const session of service.sessions) {
 			const account = String(session.actor);
-			generalLog.info('Processing account', { account });
+			generalLog.debug('Processing account', { account });
 
 			try {
 				// Sync droplets for this account
-				syncLog.info('Syncing droplets', { account });
 				await syncAccountDroplets(account, SYNC_TIMEOUT);
 
 				// Keep claiming until cache is empty for this account
@@ -276,7 +262,7 @@ export class ScrapMinerService {
 					iteration++;
 					const dropletIds = dropletCache.get(account);
 
-					claimerLog.info('Claiming droplets', {
+					claimerLog.debug('Claiming droplets', {
 						account,
 						iteration,
 						dropletsInCache: dropletIds.length
@@ -287,7 +273,7 @@ export class ScrapMinerService {
 
 					if (claimedIds.length === 0) {
 						// No droplets were claimed (might be an error or dry run)
-						claimerLog.warn('No droplets claimed, stopping', { account });
+						claimerLog.debug('No droplets claimed, stopping', { account });
 						dropletCache.clear(account);
 						break;
 					}
@@ -296,7 +282,7 @@ export class ScrapMinerService {
 					dropletCache.remove(account, claimedIds);
 
 					const remaining = dropletCache.get(account).length;
-					claimerLog.info('Batch complete', {
+					claimerLog.debug('Batch complete', {
 						account,
 						iteration,
 						claimed: claimedIds.length,
@@ -306,7 +292,7 @@ export class ScrapMinerService {
 					// If no more droplets or AUTO_RECLAIM is disabled, stop
 					if (remaining === 0 || !AUTO_RECLAIM) {
 						if (remaining > 0 && !AUTO_RECLAIM) {
-							claimerLog.info('AUTO_RECLAIM disabled, stopping', {
+							claimerLog.debug('AUTO_RECLAIM disabled, stopping', {
 								account,
 								remaining
 							});
@@ -320,9 +306,9 @@ export class ScrapMinerService {
 					}
 				}
 
-				generalLog.info('Account processing complete', { account });
+				generalLog.debug('Account processing complete', { account });
 			} catch (error) {
-				generalLog.error('Account processing failed', {
+				generalLog.error('❌ Processing failed', {
 					account,
 					error: error.message
 				});
@@ -335,7 +321,7 @@ export class ScrapMinerService {
 		// Close websocket connection
 		closeWebSocket();
 
-		generalLog.info('Once mode completed - all accounts processed');
+		generalLog.info('✅ Once mode complete');
 	}
 
 	/**

@@ -56,11 +56,11 @@ export class ScrapWebSocket {
 	connect(): Promise<void> {
 		return new Promise((resolve, reject) => {
 			try {
-				websocketLog.info('Connecting to SCRAP API websocket', { url: this.url });
+				websocketLog.debug('Connecting to SCRAP API websocket', { url: this.url });
 				this.ws = new WebSocket(this.url);
 
 			this.ws.addEventListener('open', () => {
-				websocketLog.info('Connected to SCRAP API websocket');
+				websocketLog.info('🔌 Connected to SCRAP API');
 				// Send ping to verify connection
 				this.send({ command: 'ping' });
 				// Start heartbeat ping interval
@@ -80,10 +80,10 @@ export class ScrapWebSocket {
 			this.ws.addEventListener('close', () => {
 				this.stopPingInterval();
 				if (this.shouldReconnect) {
-					websocketLog.warn('Websocket connection closed, will attempt reconnect');
+					websocketLog.warn('⚠️ Connection lost - reconnecting...');
 					this.scheduleReconnect();
 				} else {
-					websocketLog.info('Websocket connection closed (no reconnect scheduled)');
+					websocketLog.debug('Websocket connection closed (no reconnect scheduled)');
 				}
 			});
 			} catch (error) {
@@ -107,7 +107,7 @@ export class ScrapWebSocket {
 			}
 
 			if (message.command === 'epoch') {
-				websocketLog.info('Epoch changed, clearing droplet cache', {
+				websocketLog.info('⏰ Epoch changed', {
 					epoch: (message as EpochMessage).epoch
 				});
 				this.droplets.clear();
@@ -132,7 +132,7 @@ export class ScrapWebSocket {
 						websocketLog.debug('Receiving droplets', { account, count: msg.count });
 					}
 				} else if (msg.status === 'complete') {
-					websocketLog.info('Droplet streaming complete', { totalDroplets: msg.count });
+					websocketLog.debug('Droplet streaming complete', { totalDroplets: msg.count });
 					
 					// Notify waiting sync operations
 					for (const [account, callback] of this.completionCallbacks.entries()) {
@@ -140,7 +140,7 @@ export class ScrapWebSocket {
 					}
 					this.completionCallbacks.clear();
 				} else if (msg.status === 'processing') {
-					websocketLog.info('Server is still processing droplets, waiting...');
+					websocketLog.debug('Server is still processing droplets, waiting...');
 				}
 			}
 		} catch (error) {
@@ -177,13 +177,13 @@ export class ScrapWebSocket {
 	private scheduleReconnect(): void {
 		if (this.reconnectTimer) return;
 
-		websocketLog.info('Scheduling reconnection', { delay: this.reconnectDelay });
+		websocketLog.debug('Scheduling reconnection', { delay: this.reconnectDelay });
 		this.reconnectTimer = setTimeout(async () => {
 			this.reconnectTimer = null;
 			try {
 				await this.connect();
 			} catch (error) {
-				websocketLog.error('Reconnection failed', objectify({ error }));
+				websocketLog.error('❌ Reconnection failed', objectify({ error }));
 			}
 		}, this.reconnectDelay);
 	}
@@ -203,7 +203,7 @@ export class ScrapWebSocket {
 	 * Subscribe to valid scraps for an account
 	 */
 	subscribeToAccount(account: string): void {
-		websocketLog.info('Subscribing to valid scraps', { account });
+		websocketLog.debug('Subscribing to valid scraps', { account });
 		this.droplets.set(account, []); // Initialize empty array
 		this.send({ command: 'validscraps', account });
 	}
@@ -250,7 +250,7 @@ export class ScrapWebSocket {
 	 * Close websocket connection permanently (disable reconnection)
 	 */
 	close(): void {
-		websocketLog.info('Closing websocket connection');
+		websocketLog.debug('Closing websocket connection');
 		this.stopPingInterval();
 		if (this.reconnectTimer) {
 			clearTimeout(this.reconnectTimer);
@@ -266,7 +266,7 @@ export class ScrapWebSocket {
 	 * Destroy websocket and prevent reconnection (for shutdown)
 	 */
 	destroy(): void {
-		websocketLog.info('Destroying websocket connection (no reconnect)');
+		websocketLog.debug('Destroying websocket connection (no reconnect)');
 		this.shouldReconnect = false; // Disable reconnection
 		this.stopPingInterval();
 		if (this.reconnectTimer) {

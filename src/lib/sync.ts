@@ -22,10 +22,10 @@ let websocketInstance: ScrapWebSocket | null = null;
  */
 function getWebSocket(): ScrapWebSocket {
 	if (!websocketInstance) {
-		syncLog.info('Creating persistent websocket connection', { url: SCRAP_API_URL });
+		syncLog.debug('Creating persistent websocket connection', { url: SCRAP_API_URL });
 		websocketInstance = new ScrapWebSocket(SCRAP_API_URL, () => {
 			// On epoch change, clear the cache for all accounts
-			syncLog.info('Epoch changed, clearing droplet cache');
+			syncLog.info('⏰ Epoch changed - cache cleared');
 			dropletCache.clearAll();
 		});
 	}
@@ -38,7 +38,7 @@ function getWebSocket(): ScrapWebSocket {
 export async function initWebSocket(): Promise<void> {
 	const ws = getWebSocket();
 	if (!ws.isConnected()) {
-		syncLog.info('Connecting to SCRAP API websocket');
+		syncLog.debug('Connecting to SCRAP API websocket');
 		await ws.connect();
 	}
 }
@@ -63,14 +63,14 @@ export function closeWebSocket(): void {
  * 4. Store in cache
  */
 export async function syncAccountDroplets(account: string, timeout = 30000): Promise<string[]> {
-	syncLog.info('Starting droplet sync', { account, timeout });
+	syncLog.debug('Starting droplet sync', { account, timeout });
 
 	const ws = getWebSocket();
 
 	try {
 		// Ensure websocket is connected
 		if (!ws.isConnected()) {
-			syncLog.info('Websocket not connected, connecting now');
+			syncLog.debug('Websocket not connected, connecting now');
 			await ws.connect();
 		}
 
@@ -87,11 +87,15 @@ export async function syncAccountDroplets(account: string, timeout = 30000): Pro
 		// Store in cache
 		dropletCache.set(account, dropletIds);
 
-		syncLog.info('Droplet sync completed', {
-			account,
-			dropletsFound: dropletIds.length,
-			totalCount
-		});
+		// Only log if droplets found
+		if (dropletIds.length > 0) {
+			syncLog.info('Synced droplets', {
+				account,
+				droplets: dropletIds.length
+			});
+		} else {
+			syncLog.debug('No droplets found', { account });
+		}
 
 		return dropletIds;
 	} catch (error) {
@@ -107,9 +111,10 @@ export async function syncAccountDroplets(account: string, timeout = 30000): Pro
  * Sync droplets for all accounts sequentially
  */
 export async function syncAllAccounts(sessions: Session[]): Promise<void> {
-	syncLog.info('Starting sync for all accounts', { accountCount: sessions.length });
+	syncLog.debug('Starting sync for all accounts', { accountCount: sessions.length });
 
 	const results: Record<string, number> = {};
+	let totalDroplets = 0;
 
 	for (const session of sessions) {
 		const account = String(session.actor);
@@ -117,11 +122,12 @@ export async function syncAllAccounts(sessions: Session[]): Promise<void> {
 		try {
 			const dropletIds = await syncAccountDroplets(account);
 			results[account] = dropletIds.length;
+			totalDroplets += dropletIds.length;
 
 			// Small delay between accounts to be nice to the API
 			await sleep(2000);
 		} catch (error) {
-			syncLog.error('Account sync failed', {
+			syncLog.error('Sync failed', {
 				account,
 				error: error.message
 			});
@@ -129,7 +135,12 @@ export async function syncAllAccounts(sessions: Session[]): Promise<void> {
 		}
 	}
 
-	syncLog.info('Sync completed for all accounts', { results });
+	// Only log summary if droplets found
+	if (totalDroplets > 0) {
+		syncLog.info('Sync complete', { total: totalDroplets, accounts: results });
+	} else {
+		syncLog.debug('Sync complete - no droplets found', { results });
+	}
 }
 
 /**

@@ -30,10 +30,11 @@ export async function claimForAccount(session: Session, dropletIds: string[]): P
 	}
 
 	try {
-		claimerLog.info('Starting claim process', {
+		const batches = Math.ceil(dropletIds.length / CLAIM_BATCH_SIZE);
+		claimerLog.debug('Starting claim process', {
 			account,
 			totalDroplets: dropletIds.length,
-			batches: Math.ceil(dropletIds.length / CLAIM_BATCH_SIZE)
+			batches
 		});
 
 		const claimedIds: string[] = [];
@@ -50,30 +51,31 @@ export async function claimForAccount(session: Session, dropletIds: string[]): P
 				claimedIds.push(...batch);
 				offset += batch.length;
 
-				claimerLog.info('Batch claimed successfully', {
-					account,
-					batch: batchNum,
-					claimed: batch.length,
-					total: dropletIds.length,
-					remaining: dropletIds.length - offset
-				});
+				// Simple progress message
+				if (batches > 1) {
+					claimerLog.info(`Claimed batch ${batchNum}/${batches}`, {
+						account,
+						droplets: batch.length,
+						remaining: dropletIds.length - offset
+					});
+				}
 
 				// If more batches remain and AUTO_RECLAIM is enabled
 				if (offset < dropletIds.length && AUTO_RECLAIM) {
-					claimerLog.info('Waiting before next batch', {
+					claimerLog.debug('Waiting before next batch', {
 						account,
 						delay: BATCH_DELAY
 					});
 					await sleep(BATCH_DELAY);
 				} else if (offset < dropletIds.length) {
-					claimerLog.info('More droplets available but AUTO_RECLAIM is disabled', {
+					claimerLog.info('AUTO_RECLAIM disabled', {
 						account,
 						remaining: dropletIds.length - offset
 					});
 					break;
 				}
 			} catch (error) {
-				claimerLog.error('Batch claim failed', {
+				claimerLog.error('Claim failed', {
 					account,
 					batch: batchNum,
 					error: error.message
@@ -84,11 +86,10 @@ export async function claimForAccount(session: Session, dropletIds: string[]): P
 			}
 		}
 
-		claimerLog.info('Claim process completed', {
-			account,
-			totalClaimed: claimedIds.length,
-			totalAvailable: dropletIds.length
-		});
+		// Summary message
+		if (claimedIds.length > 0) {
+			claimerLog.info(`✅ Claimed ${claimedIds.length} droplets`, { account });
+		}
 
 		return claimedIds;
 	} catch (error) {
@@ -145,7 +146,7 @@ async function claimBatch(session: Session, dropletIds: string[], batchNum: numb
 	// Execute transaction
 	const result = await session.transact({ action });
 
-	claimerLog.info(
+	claimerLog.debug(
 		'Transaction broadcast successfully',
 		objectify({
 			account,
@@ -162,17 +163,17 @@ async function claimBatch(session: Session, dropletIds: string[], batchNum: numb
 export async function claimFromCache(sessions: Session[]): Promise<void> {
 	const { dropletCache } = await import('./cache');
 
-	claimerLog.info('Starting claim cycle from cache', { accounts: sessions.length });
+	claimerLog.debug('Starting claim cycle from cache', { accounts: sessions.length });
 
 	const cacheStats = dropletCache.getStats();
 	const accountsWithDroplets = Object.entries(cacheStats).filter(([_, stats]) => stats.count > 0);
 
 	if (accountsWithDroplets.length === 0) {
-		claimerLog.info('No accounts with cached droplets');
+		claimerLog.debug('No cached droplets to claim');
 		return;
 	}
 
-	claimerLog.info('Accounts with droplets', {
+	claimerLog.debug('Accounts with droplets', {
 		count: accountsWithDroplets.length,
 		accounts: accountsWithDroplets.map(([account, stats]) => ({
 			account,
@@ -193,7 +194,7 @@ export async function claimFromCache(sessions: Session[]): Promise<void> {
 					dropletCache.remove(account, claimedIds);
 				}
 			} catch (error) {
-				claimerLog.error('Claim failed for account', {
+				claimerLog.error('Claim failed', {
 					account,
 					error: error.message
 				});
@@ -204,7 +205,7 @@ export async function claimFromCache(sessions: Session[]): Promise<void> {
 		}
 	}
 
-	claimerLog.info('Claim cycle completed');
+	claimerLog.debug('Claim cycle completed');
 }
 
 /**
