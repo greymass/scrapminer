@@ -9,6 +9,7 @@ Automated SCRAP token claimer for multiple accounts. Monitors the SCRAP API and 
 - 🔑 **Auto-Discovery**: Automatically discovers account names and permissions from private keys
 - ⚡ **Batch Processing**: Configurable batch sizes for efficient claiming
 - 🔁 **Auto-Reclaim**: Automatically reclaims after generating new drops
+- ♻️ **Auto-Generate**: Maintains constant droplet balance by regenerating after claiming (mirrors scrap-ui)
 - 📊 **Structured Logging**: Winston-based logging with context
 - 🛡️ **Graceful Shutdown**: Proper cleanup on SIGINT/SIGTERM
 
@@ -33,7 +34,7 @@ Automated SCRAP token claimer for multiple accounts. Monitors the SCRAP API and 
 │         ▼                   ▼          │
 │  ┌─────────────────────────────────┐  │
 │  │     Droplet Cache (Memory)      │  │
-│  │   Map<account, dropletIds[]>    │  │
+│  │   Map<account, Droplet[]>       │  │
 │  └─────────────────────────────────┘  │
 └─────────────────────────────────────────┘
 ```
@@ -80,9 +81,12 @@ SYNC_ON_STARTUP=true                            # Sync on startup
 SYNC_TIMEOUT=30000                              # WebSocket timeout (ms) - 30s default
 
 # Claim Configuration (Process Cache)
+CLAIM_ENABLED=false                             # MUST be 'true' to broadcast (safety flag)
 CLAIM_INTERVAL=60000                            # Claim check interval (ms) - 1 minute default
 CLAIM_BATCH_SIZE=2500                           # Max droplets per claim transaction
 AUTO_RECLAIM=true                               # Auto-claim after generate operations
+AUTO_GENERATE=false                             # Auto-regenerate droplets after claiming (maintains balance)
+BATCH_DELAY=5000                                # Delay between batches (ms) - 5sec default
 
 # Logging Configuration
 LOG_LEVEL=info                                  # debug | info | warn | error
@@ -266,6 +270,9 @@ The claim scheduler:
 2. If droplets exist:
    - Takes up to `CLAIM_BATCH_SIZE` droplets
    - Builds `destroy` action with droplet IDs
+   - If `AUTO_GENERATE=true`:
+     - Filters droplets by bound/unbound status
+     - Adds `generate` action(s) to regenerate same count
    - Submits transaction to blockchain
    - Removes claimed droplets from cache
 3. If `AUTO_RECLAIM=true` and destroy generated new drops:
@@ -282,11 +289,21 @@ The claim scheduler:
 
 **Cache Structure**:
 ```typescript
-Map<string, Set<number>>
+Map<string, Droplet[]>
+
+interface Droplet {
+  _id: string;        // Droplet ID
+  owner: string;      // Account name
+  bound: boolean;     // RAM source (true = contract RAM, false = user RAM)
+  created: string;    // Creation timestamp
+}
+
 // Example:
 {
-  "claimer@claim": Set([123, 456, 789]),
-  "account2@claim": Set([321, 654])
+  "claimer@claim": [
+    { _id: "123", owner: "claimer", bound: true, created: "2025-11-23T..." },
+    { _id: "456", owner: "claimer", bound: false, created: "2025-11-23T..." }
+  ]
 }
 ```
 
@@ -339,6 +356,43 @@ When enabled:
 - Claims new droplets in next cycle
 
 **Disable if**: You want to manually control when generated drops are claimed.
+
+### Auto-Generate
+
+```bash
+AUTO_GENERATE=false  # Set to true to maintain constant droplet balance
+```
+
+When enabled:
+- After destroying droplets to claim SCRAP tokens
+- Automatically regenerates the same number of droplets
+- Maintains constant droplet balance (mirrors scrap-ui behavior)
+- Separates bound and unbound droplets for proper RAM accounting
+
+**How it works**:
+1. Destroy droplets → claim SCRAP tokens
+2. Filter destroyed droplets by `bound` flag
+3. Generate new bound droplets (if any bound were destroyed)
+4. Generate new unbound droplets (if any unbound were destroyed)
+5. Each droplet regenerated maintains its bound status
+
+**Transaction structure**:
+```typescript
+{
+  actions: [
+    { name: 'destroy', data: { droplet_ids: [...] } },
+    { name: 'generate', data: { bound: true, count: X } },   // If bound droplets destroyed
+    { name: 'generate', data: { bound: false, count: Y } }   // If unbound droplets destroyed
+  ]
+}
+```
+
+**Why separate bound/unbound?**
+- Bound droplets use RAM from contract
+- Unbound droplets use RAM from user account
+- Preserves RAM accounting by regenerating with same bound status
+
+**Disable if**: You want your droplet count to decrease as you claim SCRAP.
 
 ## Security
 
