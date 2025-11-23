@@ -38,6 +38,7 @@ export async function claimForAccount(session: Session, dropletIds: string[]): P
 		});
 
 		const claimedIds: string[] = [];
+		const txIds: string[] = [];
 		let batchNum = 0;
 
 		// Process in batches
@@ -47,16 +48,20 @@ export async function claimForAccount(session: Session, dropletIds: string[]): P
 			const batch = dropletIds.slice(offset, offset + CLAIM_BATCH_SIZE);
 
 			try {
-				await claimBatch(session, batch, batchNum);
+				const txId = await claimBatch(session, batch, batchNum);
+				if (txId) {
+					txIds.push(txId);
+				}
 				claimedIds.push(...batch);
 				offset += batch.length;
 
-				// Simple progress message
+				// Simple progress message for multi-batch claims
 				if (batches > 1) {
 					claimerLog.info(`Claimed batch ${batchNum}/${batches}`, {
 						account,
 						droplets: batch.length,
-						remaining: dropletIds.length - offset
+						remaining: dropletIds.length - offset,
+						txId
 					});
 				}
 
@@ -86,9 +91,24 @@ export async function claimForAccount(session: Session, dropletIds: string[]): P
 			}
 		}
 
-		// Summary message
+		// Summary message with transaction IDs
 		if (claimedIds.length > 0) {
-			claimerLog.info(`✅ Claimed ${claimedIds.length} droplets`, { account });
+			if (txIds.length === 1) {
+				// Single transaction
+				claimerLog.info(`✅ Claimed ${claimedIds.length} droplets`, { 
+					account,
+					txId: txIds[0]
+				});
+			} else if (txIds.length > 1) {
+				// Multiple transactions
+				claimerLog.info(`✅ Claimed ${claimedIds.length} droplets in ${txIds.length} transactions`, { 
+					account,
+					txIds
+				});
+			} else {
+				// Dry run mode
+				claimerLog.info(`✅ Claimed ${claimedIds.length} droplets (DRY RUN)`, { account });
+			}
 		}
 
 		return claimedIds;
@@ -102,8 +122,9 @@ export async function claimForAccount(session: Session, dropletIds: string[]): P
 
 /**
  * Claim a single batch of droplets
+ * @returns Transaction ID if successful, null if dry run
  */
-async function claimBatch(session: Session, dropletIds: string[], batchNum: number): Promise<void> {
+async function claimBatch(session: Session, dropletIds: string[], batchNum: number): Promise<string | null> {
 	const account = String(session.actor);
 
 	// Convert droplet IDs to UInt64
@@ -129,7 +150,7 @@ async function claimBatch(session: Session, dropletIds: string[], batchNum: numb
 				toNotify: SCRAP_CONTRACT
 			})
 		);
-		return;
+		return null;
 	}
 
 	claimerLog.debug(
@@ -145,16 +166,19 @@ async function claimBatch(session: Session, dropletIds: string[], batchNum: numb
 
 	// Execute transaction
 	const result = await session.transact({ action });
+	const txId = String(result.response?.transaction_id || '');
 
 	claimerLog.debug(
 		'Transaction broadcast successfully',
 		objectify({
 			account,
 			batch: batchNum,
-			transactionId: result.response?.transaction_id,
+			transactionId: txId,
 			droplets: ids.length
 		})
 	);
+
+	return txId;
 }
 
 /**
