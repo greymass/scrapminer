@@ -59,6 +59,7 @@ export const CLAIM_BATCH_SIZE = process.env.CLAIM_BATCH_SIZE
 	? Number(process.env.CLAIM_BATCH_SIZE)
 	: 2500;
 export const AUTO_RECLAIM = isENVTrue(process.env.AUTO_RECLAIM ?? 'false');
+export const AUTO_GENERATE = isENVTrue(process.env.AUTO_GENERATE ?? 'false');
 export const BATCH_DELAY = process.env.BATCH_DELAY ? Number(process.env.BATCH_DELAY) : 5000; // milliseconds
 
 // Warn if claims are disabled in production (suppress for sync command)

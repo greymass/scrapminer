@@ -5,9 +5,10 @@
  * and multi-account coordination.
  */
 
-import { UInt64 } from '@wharfkit/antelope';
+import { UInt32, UInt64 } from '@wharfkit/antelope';
 import type { Session } from '@wharfkit/session';
 import {
+	AUTO_GENERATE,
 	AUTO_RECLAIM,
 	BATCH_DELAY,
 	CLAIM_BATCH_SIZE,
@@ -93,15 +94,17 @@ export async function claimForAccount(session: Session, dropletIds: string[]): P
 
 		// Summary message with transaction IDs
 		if (claimedIds.length > 0) {
+			const autoGenSuffix = AUTO_GENERATE ? ' + regenerated' : '';
+			
 			if (txIds.length === 1) {
 				// Single transaction
-				claimerLog.info(`✅ Claimed ${claimedIds.length} droplets`, { 
+				claimerLog.info(`✅ Claimed ${claimedIds.length} droplets${autoGenSuffix}`, { 
 					account,
 					txId: txIds[0]
 				});
 			} else if (txIds.length > 1) {
 				// Multiple transactions
-				claimerLog.info(`✅ Claimed ${claimedIds.length} droplets in ${txIds.length} transactions`, { 
+				claimerLog.info(`✅ Claimed ${claimedIds.length} droplets in ${txIds.length} transactions${autoGenSuffix}`, { 
 					account,
 					txIds
 				});
@@ -131,12 +134,33 @@ async function claimBatch(session: Session, dropletIds: string[], batchNum: numb
 	const ids = dropletIds.map((id) => UInt64.from(id));
 
 	// Build destroy action with CRITICAL to_notify parameter
-	const action = dropsContract.action('destroy', {
+	const destroyAction = dropsContract.action('destroy', {
 		owner: session.actor,
 		drops_ids: ids,
 		memo: `scrapminer batch ${batchNum}`,
 		to_notify: SCRAP_CONTRACT // CRITICAL: triggers SCRAP minting
 	});
+
+	// Build actions array - add generate after destroy if AUTO_GENERATE enabled
+	const actions = [destroyAction];
+	
+	if (AUTO_GENERATE) {
+		// Generate the same number of unbound droplets that were destroyed
+		const generateAction = dropsContract.action('generate', {
+			owner: session.actor,
+			bound: false, // Always generate unbound (destroyed drops yield SCRAP)
+			amount: UInt32.from(ids.length),
+			data: ''
+			// Note: to_notify is optional, omitting it for now
+		});
+		actions.push(generateAction);
+		
+		claimerLog.debug('AUTO_GENERATE enabled - will regenerate droplets', {
+			account,
+			batch: batchNum,
+			droplets: ids.length
+		});
+	}
 
 	// Safety check: CLAIM_ENABLED must be true to broadcast
 	if (!CLAIM_ENABLED) {
@@ -146,7 +170,7 @@ async function claimBatch(session: Session, dropletIds: string[], batchNum: numb
 				account,
 				batch: batchNum,
 				droplets: ids.length,
-				action: 'destroy',
+				actions: AUTO_GENERATE ? 'destroy + generate' : 'destroy',
 				toNotify: SCRAP_CONTRACT
 			})
 		);
@@ -154,18 +178,20 @@ async function claimBatch(session: Session, dropletIds: string[], batchNum: numb
 	}
 
 	claimerLog.debug(
-		'Broadcasting destroy transaction',
+		'Broadcasting transaction',
 		objectify({
 			account,
 			batch: batchNum,
 			droplets: ids.length,
-			toNotify: SCRAP_CONTRACT,
-			action
+			actions: AUTO_GENERATE ? 'destroy + generate' : 'destroy',
+			toNotify: SCRAP_CONTRACT
 		})
 	);
 
-	// Execute transaction
-	const result = await session.transact({ action });
+	// Execute transaction with one or more actions
+	const result = AUTO_GENERATE 
+		? await session.transact({ actions }) // Multiple actions
+		: await session.transact({ action: destroyAction }); // Single action
 	const txId = String(result.response?.transaction_id || '');
 
 	claimerLog.debug(
@@ -174,7 +200,8 @@ async function claimBatch(session: Session, dropletIds: string[], batchNum: numb
 			account,
 			batch: batchNum,
 			transactionId: txId,
-			droplets: ids.length
+			droplets: ids.length,
+			autoGenerate: AUTO_GENERATE
 		})
 	);
 
