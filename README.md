@@ -82,9 +82,9 @@ SYNC_ON_STARTUP=true                            # Sync on startup
 SYNC_TIMEOUT=30000                              # WebSocket timeout (ms) - 30s default
 
 # Claim Configuration (Process Cache)
-CLAIM_ENABLED=false                             # MUST be 'true' to broadcast (safety flag)
+DRY_RUN=true                                    # Global dry-run flag (true = preview, false = broadcast)
 CLAIM_INTERVAL=60000                            # Claim check interval (ms) - 1 minute default
-CLAIM_BATCH_SIZE=2500                           # Max droplets per claim transaction
+CLAIM_BATCH_SIZE=2500                           # Max droplets per transaction
 AUTO_RECLAIM=true                               # Auto-claim after generate operations
 AUTO_GENERATE=false                             # Auto-regenerate droplets after claiming (maintains balance)
 BATCH_DELAY=5000                                # Delay between batches (ms) - 5sec default
@@ -185,6 +185,104 @@ Generates a Unicove signing request to create and link the claim permission:
 4. Generates Unicove URL to complete missing setup steps
 
 **Output**: Clickable Unicove URL to sign the permission setup transaction
+
+### `destroy`
+
+Destroy droplets for a specific account (converts to SCRAP tokens):
+
+```bash
+./scrapminer destroy --account <name> --droplets <id1,id2,...> [options]
+```
+
+**Options**:
+- `-a, --account <name>` (required): Account that owns the droplets
+- `-d, --droplets <ids>` (required): Comma-separated droplet IDs to destroy
+- `--memo <text>`: Transaction memo
+- `--notify <account>`: Account to notify (defaults to scrap contract for token minting)
+- `--dry-run`: Force dry-run mode (overrides env var)
+- `--no-dry-run`: Disable dry-run mode and broadcast transactions
+
+**Features**:
+- **Defaults to dry-run mode** (controlled by `DRY_RUN` env var, defaults to `true`)
+- Automatic batching if droplet count exceeds `CLAIM_BATCH_SIZE`
+- 5-second delay between batches (configurable via `BATCH_DELAY`)
+- Validates droplet ID format
+- Requires active or higher permission (NOT claim permission)
+
+**Examples**:
+```bash
+# Preview destroy (dry-run mode - default behavior)
+./scrapminer destroy --account alice --droplets 12345,67890,111111
+
+# Actually destroy droplets (disable dry-run)
+./scrapminer destroy --account alice --droplets 12345,67890,111111 --no-dry-run
+
+# Force dry-run even if DRY_RUN=false
+./scrapminer destroy --account alice --droplets 12345 --dry-run
+
+# With custom memo
+./scrapminer destroy --account alice --droplets 12345 --memo "cleanup" --no-dry-run
+
+# Large batch (auto-splits into multiple transactions)
+./scrapminer destroy --account alice --droplets 1,2,3,4,...,5000 --no-dry-run
+```
+
+### `generate`
+
+Generate new droplets for a specific account:
+
+```bash
+./scrapminer generate --account <name> --amount <number> --type <bound|unbound> [options]
+```
+
+**Options**:
+- `-a, --account <name>` (required): Account to generate droplets for
+- `-n, --amount <number>` (required): Number of droplets to generate
+- `-t, --type <bound|unbound>` (required): Droplet type
+  - `bound`: RAM paid by contract
+  - `unbound`: RAM paid by user
+- `--data <string>`: Custom data/hash for generation (auto-generated if not provided)
+- `--notify <account>`: Account to notify after generation
+- `--dry-run`: Force dry-run mode (overrides env var)
+- `--no-dry-run`: Disable dry-run mode and broadcast transactions
+
+**Features**:
+- **Defaults to dry-run mode** (controlled by `DRY_RUN` env var, defaults to `true`)
+- Automatic batching if amount exceeds `CLAIM_BATCH_SIZE`
+- 5-second delay between batches (configurable via `BATCH_DELAY`)
+- Auto-generates random hash for data field
+- Requires active or higher permission (NOT claim permission)
+
+**Examples**:
+```bash
+# Preview generation (dry-run mode - default behavior)
+./scrapminer generate --account alice --amount 10 --type bound
+
+# Actually generate droplets (disable dry-run)
+./scrapminer generate --account alice --amount 10 --type bound --no-dry-run
+
+# Generate 50 unbound droplets (broadcast)
+./scrapminer generate --account alice --amount 50 --type unbound --no-dry-run
+
+# Force dry-run even if DRY_RUN=false
+./scrapminer generate --account alice --amount 100 --type bound --dry-run
+
+# Large batch (auto-splits into multiple transactions)
+./scrapminer generate --account alice --amount 3000 --type unbound --no-dry-run
+
+# With custom data
+./scrapminer generate --account alice --amount 5 --type bound --data "custom-hash-123" --no-dry-run
+```
+
+### `sync`
+
+Fetch droplets from SCRAP API and output as JSON (for piping/scripting):
+
+```bash
+./scrapminer sync [--account <name>] [--limit <number>] [--pretty]
+```
+
+**Use case**: Checking droplet status, scripting, automation
 
 ## Operation Modes
 

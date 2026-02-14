@@ -5,33 +5,21 @@
  * and multi-account coordination.
  */
 
-import { Bytes, Checksum256, UInt32, UInt64 } from "@wharfkit/antelope";
 import type { Session } from "@wharfkit/session";
 import {
   AUTO_GENERATE,
   AUTO_RECLAIM,
   BATCH_DELAY,
-  CLAIM_BATCH_SIZE,
-  CLAIM_ENABLED,
-  SCRAP_CONTRACT,
+  DRY_RUN,
 } from "../config";
 import type { Droplet } from "./cache";
 import { claimerLog } from "./logger";
-import { objectify } from "./utils";
-import { dropsContract } from "./wharf";
-
-/**
- * Generate random name for droplet generation (mirrors scrap-ui implementation)
- */
-function randomName(): string {
-  const length = 12;
-  const chars = "abcdefghijklmnopqrstuvwxyz12345";
-  let drops = "";
-  for (let i = 0; i < length; i++) {
-    drops += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return drops;
-}
+import { 
+  buildDestroyAction,
+  buildDestroyAndRegenerateActions 
+} from "./actions/drops";
+import { executeTransactionOrThrow } from "./transaction";
+import { processBatches } from "./batch";
 
 /**
  * Claim SCRAP tokens for a single account session using cached droplets
@@ -47,67 +35,56 @@ export async function claimForAccount(
     return [];
   }
 
+  // Track claimed IDs and transaction IDs at function scope
+  const claimedIds: string[] = [];
+  const txIds: string[] = [];
+
   try {
-    const batches = Math.ceil(droplets.length / CLAIM_BATCH_SIZE);
     claimerLog.debug("Starting claim process", {
       account,
       totalDroplets: droplets.length,
-      batches,
     });
 
-    const claimedIds: string[] = [];
-    const txIds: string[] = [];
-    let batchNum = 0;
-
-    // Process in batches
-    let offset = 0;
-    while (offset < droplets.length) {
-      batchNum++;
-      const batch = droplets.slice(offset, offset + CLAIM_BATCH_SIZE);
-
-      try {
-        const txId = await claimBatch(session, batch, batchNum);
+    // Process in batches using shared utility
+    const results = await processBatches(
+      droplets,
+      async (batch, batchNum, totalBatches) => {
+        const txId = await claimBatch(session, batch, batchNum, totalBatches);
+        
+        // Track claimed IDs
+        claimedIds.push(...batch.map((d) => d._id));
         if (txId) {
           txIds.push(txId);
         }
-        claimedIds.push(...batch.map((d) => d._id));
-        offset += batch.length;
 
-        // Simple progress message for multi-batch claims
-        if (batches > 1) {
-          claimerLog.info(`Claimed batch ${batchNum}/${batches}`, {
+        // Progress message for multi-batch claims
+        if (totalBatches > 1) {
+          claimerLog.info(`Claimed batch ${batchNum}/${totalBatches}`, {
             account,
             droplets: batch.length,
-            remaining: droplets.length - offset,
+            remaining: droplets.length - claimedIds.length,
             txId,
           });
         }
 
-        // If more batches remain and AUTO_RECLAIM is enabled
-        if (offset < droplets.length && AUTO_RECLAIM) {
-          claimerLog.debug("Waiting before next batch", {
-            account,
-            delay: BATCH_DELAY,
-          });
-          await sleep(BATCH_DELAY);
-        } else if (offset < droplets.length) {
+        // Check AUTO_RECLAIM before continuing
+        if (claimedIds.length < droplets.length && !AUTO_RECLAIM) {
           claimerLog.info("AUTO_RECLAIM disabled", {
             account,
-            remaining: droplets.length - offset,
+            remaining: droplets.length - claimedIds.length,
           });
-          break;
+          // Stop processing by throwing special error
+          throw new Error("AUTO_RECLAIM_DISABLED");
         }
-      } catch (error) {
-        claimerLog.error("Claim failed", {
-          account,
-          batch: batchNum,
-          error: error.message,
-        });
 
-        // Don't continue to next batch on error
-        break;
+        return txId;
+      },
+      {
+        logger: claimerLog,
+        logContext: { account },
+        continueOnError: false // Stop on first error
       }
-    }
+    );
 
     // Summary message with transaction IDs
     if (claimedIds.length > 0) {
@@ -141,10 +118,16 @@ export async function claimForAccount(
 
     return claimedIds;
   } catch (error) {
+    // Ignore AUTO_RECLAIM_DISABLED error - it's intentional
+    if (error.message === "AUTO_RECLAIM_DISABLED") {
+      return claimedIds;
+    }
+
     claimerLog.error("Claim process failed", {
       account,
       error: error.message,
     });
+    return [];
   }
 }
 
@@ -155,105 +138,48 @@ export async function claimForAccount(
 async function claimBatch(
   session: Session,
   droplets: Droplet[],
-  batchNum: number
+  batchNum: number,
+  totalBatches: number
 ): Promise<string | null> {
   const account = String(session.actor);
 
-  // Convert droplet IDs to UInt64
-  const ids = droplets.map((d) => UInt64.from(d._id));
+  // Build actions using shared utilities
+  const actions = AUTO_GENERATE
+    ? buildDestroyAndRegenerateActions(
+        session.actor,
+        droplets,
+        { memo: `scrapminer batch ${batchNum}` }
+      )
+    : [buildDestroyAction(
+        session.actor,
+        droplets.map(d => d._id),
+        { memo: `scrapminer batch ${batchNum}` }
+      )];
 
-  // Build destroy action with CRITICAL to_notify parameter
-  const destroyAction = dropsContract.action("destroy", {
-    owner: session.actor,
-    droplet_ids: ids,
-    memo: `scrapminer batch ${batchNum}`,
-    to_notify: SCRAP_CONTRACT, // CRITICAL: triggers SCRAP minting
-  });
-
-  // Build actions array - add generate after destroy if AUTO_GENERATE enabled
-  const actions = [destroyAction];
-
+  // Log AUTO_GENERATE details if enabled
   if (AUTO_GENERATE) {
-    // Separate bound and unbound droplets (mirrors scrap-ui exactly)
-    const boundDestroyed = droplets.filter((drop) => drop.bound === true);
-    const unboundDestroyed = droplets.filter((drop) => drop.bound === false);
-
-    // Generate bound droplets if any were destroyed
-    if (boundDestroyed.length > 0) {
-      const hash = String(Checksum256.hash(Bytes.from(randomName(), "utf8")));
-      actions.push(
-        dropsContract.action("generate", {
-          amount: UInt32.from(boundDestroyed.length),
-          bound: true,
-          data: hash,
-          owner: session.actor,
-        })
-      );
-    }
-
-    // Generate unbound droplets if any were destroyed
-    if (unboundDestroyed.length > 0) {
-      const hash = String(Checksum256.hash(Bytes.from(randomName(), "utf8")));
-      actions.push(
-        dropsContract.action("generate", {
-          amount: UInt32.from(unboundDestroyed.length),
-          bound: false,
-          data: hash,
-          owner: session.actor,
-        })
-      );
-    }
+    const boundCount = droplets.filter(d => d.bound === true).length;
+    const unboundCount = droplets.filter(d => d.bound === false).length;
 
     claimerLog.debug("AUTO_GENERATE enabled - will regenerate droplets", {
       account,
       batch: batchNum,
-      bound: boundDestroyed.length,
-      unbound: unboundDestroyed.length,
+      bound: boundCount,
+      unbound: unboundCount,
       total: droplets.length,
     });
   }
 
-  // Safety check: CLAIM_ENABLED must be true to broadcast
-  if (!CLAIM_ENABLED) {
-    claimerLog.warn(
-      "DRY RUN: Transaction not broadcast (CLAIM_ENABLED=false)",
-      objectify({
-        account,
-        batch: batchNum,
-        droplets: ids.length,
-        actions: AUTO_GENERATE ? "destroy + generate" : "destroy",
-        toNotify: SCRAP_CONTRACT,
-      })
-    );
-    return null;
-  }
-
-  const actionCount = actions.length;
-  claimerLog.debug(
-    "Broadcasting transaction",
-    objectify({
-      account,
-      batch: batchNum,
-      droplets: ids.length,
-      actions:
-        actionCount === 1 ? "destroy" : `destroy + ${actionCount - 1} generate`,
-      toNotify: SCRAP_CONTRACT,
-    })
-  );
-
-  // Execute transaction with one or more actions
-  const result = await session.transact({ actions });
-  const txId = String(result.response?.transaction_id || "");
-
-  claimerLog.debug(
-    "Transaction broadcast successfully",
-    objectify({
-      account,
-      batch: batchNum,
-      transactionId: txId,
-      droplets: ids.length,
-      actionCount,
-    })
+  // Execute transaction using shared utility
+  const txId = await executeTransactionOrThrow(
+    session,
+    actions,
+    {
+      broadcast: !DRY_RUN,
+      logger: claimerLog,
+      logContext: { batch: batchNum, totalBatches },
+      description: `Claim batch ${batchNum}/${totalBatches} (${droplets.length} droplets)`
+    }
   );
 
   return txId;
@@ -307,16 +233,9 @@ export async function claimFromCache(sessions: Session[]): Promise<void> {
       }
 
       // Small delay between accounts to avoid rate limits
-      await sleep(1000);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
 
   claimerLog.debug("Claim cycle completed");
-}
-
-/**
- * Helper: sleep for specified milliseconds
- */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

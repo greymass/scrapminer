@@ -68,7 +68,7 @@ export async function createSessions(accounts: AccountConfig[]): Promise<Session
 				continue;
 			}
 
-			configLog.info('Accounts discovered', {
+			configLog.debug('Accounts discovered', {
 				keyIndex: i + 1,
 				accountCount: discoveredAccounts.length,
 				accounts: discoveredAccounts.map((acc) => `${acc.actor}@${acc.permission}`)

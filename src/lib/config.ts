@@ -9,8 +9,8 @@
 import {
 	CHAIN_NAME,
 	CLAIM_BATCH_SIZE,
-	CLAIM_ENABLED,
 	CLAIM_INTERVAL,
+	DRY_RUN,
 	SCRAP_API_URL
 } from '../config';
 import { configLog } from './logger';
@@ -44,20 +44,20 @@ export function loadAccounts(): AccountConfig[] {
  * Validate required environment variables and log configuration summary
  *
  * Note: Most validation now happens in config.ts at module load time.
- * This function just logs a summary and checks CLAIM_ENABLED flag.
+ * This function just logs a summary and checks DRY_RUN flag.
  */
 export function validateConfig(): void {
-	// Check CLAIM_ENABLED flag
-	if (!CLAIM_ENABLED) {
+	// Check DRY_RUN flag
+	if (DRY_RUN) {
 		configLog.warn(
-			'⚠️  CLAIM_ENABLED is not set to true - running in DRY RUN mode (no transactions will be broadcast)'
+			'⚠️  DRY_RUN=true - running in DRY RUN mode (no transactions will be broadcast)'
 		);
 	}
 
 	configLog.info('Configuration validated', {
 		chain: CHAIN_NAME,
 		apiUrl: SCRAP_API_URL,
-		claimEnabled: CLAIM_ENABLED,
+		dryRun: DRY_RUN,
 		claimInterval: CLAIM_INTERVAL,
 		batchSize: CLAIM_BATCH_SIZE
 	});

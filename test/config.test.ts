@@ -3,6 +3,9 @@
  *
  * Tests account loading and configuration validation.
  * Uses test/.env for isolated test environment.
+ *
+ * NOTE: After PRIVATE_KEY refactor, loadAccounts() now only returns
+ * { privkey } - account discovery happens at runtime via blockchain API.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
@@ -12,12 +15,8 @@ const originalEnv = { ...process.env };
 
 describe('Config: loadAccounts()', () => {
 	beforeEach(() => {
-		// Clear all ACCOUNT* env vars before each test
-		Object.keys(process.env).forEach((key) => {
-			if (key.startsWith('ACCOUNT')) {
-				delete process.env[key];
-			}
-		});
+		// Clear PRIVATE_KEY env var before each test
+		delete process.env.PRIVATE_KEY;
 	});
 
 	afterEach(() => {
@@ -25,89 +24,36 @@ describe('Config: loadAccounts()', () => {
 		process.env = { ...originalEnv };
 	});
 
-	test('loads single account from environment', async () => {
-		// Set up test account
-		process.env.ACCOUNT1_NAME = 'testuser1';
-		process.env.ACCOUNT1_PERMISSION = 'claim';
-		process.env.ACCOUNT1_KEY = '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3';
+	test('loads account from PRIVATE_KEY environment variable', async () => {
+		// Set up test private key
+		process.env.PRIVATE_KEY = '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3';
 
 		// Dynamically import to get fresh module with new env vars
 		const { loadAccounts } = await import('../src/lib/config');
 		const accounts = loadAccounts();
 
 		expect(accounts).toHaveLength(1);
-		expect(accounts[0].actor).toBe('testuser1');
-		expect(accounts[0].permission).toBe('claim');
 		expect(accounts[0].privkey).toBe('5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3');
+		// Note: actor and permission are discovered at runtime, not in config
 	});
 
-	test('loads multiple accounts from environment', async () => {
-		// Set up multiple test accounts
-		process.env.ACCOUNT1_NAME = 'testuser1';
-		process.env.ACCOUNT1_PERMISSION = 'claim';
-		process.env.ACCOUNT1_KEY = '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3';
+	test('throws error when PRIVATE_KEY is missing', async () => {
+		// PRIVATE_KEY not set
 
-		process.env.ACCOUNT2_NAME = 'testuser2';
-		process.env.ACCOUNT2_PERMISSION = 'active';
-		process.env.ACCOUNT2_KEY = '5JgqWJYVBcRhviWZB3TU1tN6pG7ufhqcQqqLfNxgEfBYDVqNrZB';
+		const { loadAccounts } = await import('../src/lib/config');
 
-		process.env.ACCOUNT3_NAME = 'testuser3';
-		process.env.ACCOUNT3_KEY = '5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbLvyTHU';
+		expect(() => loadAccounts()).toThrow('No account configured. Set PRIVATE_KEY in .env');
+	});
+
+	test('returns array with single account config', async () => {
+		process.env.PRIVATE_KEY = '5JgqWJYVBcRhviWZB3TU1tN6pG7ufhqcQqqLfNxgEfBYDVqNrZB';
 
 		const { loadAccounts } = await import('../src/lib/config');
 		const accounts = loadAccounts();
 
-		expect(accounts).toHaveLength(3);
-		expect(accounts[0].actor).toBe('testuser1');
-		expect(accounts[1].actor).toBe('testuser2');
-		expect(accounts[1].permission).toBe('active');
-		expect(accounts[2].actor).toBe('testuser3');
-		expect(accounts[2].permission).toBe('claim'); // default permission
-	});
-
-	test('uses default permission when not specified', async () => {
-		process.env.ACCOUNT1_NAME = 'testuser1';
-		process.env.ACCOUNT1_KEY = '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3';
-		// ACCOUNT1_PERMISSION not set
-
-		const { loadAccounts } = await import('../src/lib/config');
-		const accounts = loadAccounts();
-
-		expect(accounts[0].permission).toBe('claim'); // default
-	});
-
-	test('throws error when private key is missing', async () => {
-		process.env.ACCOUNT1_NAME = 'testuser1';
-		process.env.ACCOUNT1_PERMISSION = 'claim';
-		// ACCOUNT1_KEY not set
-
-		const { loadAccounts } = await import('../src/lib/config');
-
-		expect(() => loadAccounts()).toThrow('ACCOUNT1_KEY is required');
-	});
-
-	test('throws error when no accounts are configured', async () => {
-		// No ACCOUNT* env vars set
-
-		const { loadAccounts } = await import('../src/lib/config');
-
-		expect(() => loadAccounts()).toThrow('No accounts configured');
-	});
-
-	test('handles non-sequential account numbers gracefully', async () => {
-		// Only ACCOUNT1 and ACCOUNT3 (missing ACCOUNT2)
-		process.env.ACCOUNT1_NAME = 'testuser1';
-		process.env.ACCOUNT1_KEY = '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3';
-
-		process.env.ACCOUNT3_NAME = 'testuser3';
-		process.env.ACCOUNT3_KEY = '5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbLvyTHU';
-
-		const { loadAccounts } = await import('../src/lib/config');
-		const accounts = loadAccounts();
-
-		// Should only load ACCOUNT1 (stops at first gap)
+		// Always returns array (even though currently single key only)
+		expect(Array.isArray(accounts)).toBe(true);
 		expect(accounts).toHaveLength(1);
-		expect(accounts[0].actor).toBe('testuser1');
 	});
 });
 

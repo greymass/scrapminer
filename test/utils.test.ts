@@ -1,12 +1,14 @@
 /**
  * Unit tests for src/lib/utils.ts
  *
- * Tests utility functions for environment variable handling
- * and object serialization.
+ * Tests utility functions for environment variable handling,
+ * object serialization, and account discovery.
  */
 
-import { describe, test, expect } from 'bun:test';
-import { objectify, isENVTrue, isENVFalse } from '../src/lib/utils';
+import { describe, test, expect, mock } from 'bun:test';
+import { objectify, isENVTrue, isENVFalse, discoverAccountsFromPrivateKey } from '../src/lib/utils';
+import { PrivateKey } from '@wharfkit/antelope';
+import type { APIClient } from '@wharfkit/antelope';
 
 describe('Utils: objectify()', () => {
 	test('converts plain object to JSON', () => {
@@ -108,5 +110,235 @@ describe('Utils: isENVFalse()', () => {
 		expect(isENVFalse('no')).toBe(false);
 		expect(isENVFalse('FALSE')).toBe(false);
 		expect(isENVFalse('False')).toBe(false);
+	});
+});
+
+describe('Utils: discoverAccountsFromPrivateKey()', () => {
+	// Sample test private key (from EOS docs - publicly known)
+	const testPrivateKey = '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3';
+	// Note: Using PUB_K1_ format (modern Antelope format, not legacy EOS format)
+	const testPublicKey = 'PUB_K1_6MRyAjQq8ud7hVNYcfnVPJqcVpscN5So8BhtHuGYqET5BoDq63';
+
+	test('discovers accounts with multiple permissions', async () => {
+		// Mock API response with multiple accounts/permissions
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() =>
+						Promise.resolve({
+							accounts: [
+								{ account_name: 'testuser1', permission_name: 'active' },
+								{ account_name: 'testuser1', permission_name: 'claim' },
+								{ account_name: 'testuser2', permission_name: 'active' }
+							]
+						})
+					)
+				}
+			}
+		} as unknown as APIClient;
+
+		const accounts = await discoverAccountsFromPrivateKey(testPrivateKey, mockClient);
+
+		expect(accounts).toHaveLength(3);
+		expect(accounts[0]).toEqual({
+			actor: 'testuser1',
+			permission: 'active',
+			publicKey: testPublicKey
+		});
+		expect(accounts[1]).toEqual({
+			actor: 'testuser1',
+			permission: 'claim',
+			publicKey: testPublicKey
+		});
+		expect(accounts[2]).toEqual({
+			actor: 'testuser2',
+			permission: 'active',
+			publicKey: testPublicKey
+		});
+
+		// Verify API was called with correct public key
+		expect(mockClient.v1.chain.get_accounts_by_authorizers).toHaveBeenCalledWith({
+			keys: [expect.any(Object)] // PublicKey object
+		});
+	});
+
+	test('filters by preferred permission', async () => {
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() =>
+						Promise.resolve({
+							accounts: [
+								{ account_name: 'testuser1', permission_name: 'active' },
+								{ account_name: 'testuser1', permission_name: 'claim' },
+								{ account_name: 'testuser2', permission_name: 'claim' }
+							]
+						})
+					)
+				}
+			}
+		} as unknown as APIClient;
+
+		const accounts = await discoverAccountsFromPrivateKey(testPrivateKey, mockClient, 'claim');
+
+		// Should only return 'claim' permissions
+		expect(accounts).toHaveLength(2);
+		expect(accounts[0].permission).toBe('claim');
+		expect(accounts[1].permission).toBe('claim');
+		expect(accounts[0].actor).toBe('testuser1');
+		expect(accounts[1].actor).toBe('testuser2');
+	});
+
+	test('returns empty array when no accounts found', async () => {
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() =>
+						Promise.resolve({
+							accounts: []
+						})
+					)
+				}
+			}
+		} as unknown as APIClient;
+
+		const accounts = await discoverAccountsFromPrivateKey(testPrivateKey, mockClient);
+
+		expect(accounts).toEqual([]);
+	});
+
+	test('returns empty array when response.accounts is undefined', async () => {
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() => Promise.resolve({}))
+				}
+			}
+		} as unknown as APIClient;
+
+		const accounts = await discoverAccountsFromPrivateKey(testPrivateKey, mockClient);
+
+		expect(accounts).toEqual([]);
+	});
+
+	test('returns empty array when preferred permission not found', async () => {
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() =>
+						Promise.resolve({
+							accounts: [
+								{ account_name: 'testuser1', permission_name: 'active' },
+								{ account_name: 'testuser2', permission_name: 'owner' }
+							]
+						})
+					)
+				}
+			}
+		} as unknown as APIClient;
+
+		const accounts = await discoverAccountsFromPrivateKey(testPrivateKey, mockClient, 'claim');
+
+		expect(accounts).toEqual([]);
+	});
+
+	test('throws error on API failure', async () => {
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() =>
+						Promise.reject(new Error('Network timeout'))
+					)
+				}
+			}
+		} as unknown as APIClient;
+
+		await expect(
+			discoverAccountsFromPrivateKey(testPrivateKey, mockClient)
+		).rejects.toThrow('Failed to discover accounts from private key: Network timeout');
+	});
+
+	test('throws error on invalid private key', async () => {
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() => Promise.resolve({ accounts: [] }))
+				}
+			}
+		} as unknown as APIClient;
+
+		// PrivateKey.from() will throw on invalid key
+		await expect(
+			discoverAccountsFromPrivateKey('invalid-key', mockClient)
+		).rejects.toThrow();
+	});
+
+	test('converts private key to public key correctly', async () => {
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() =>
+						Promise.resolve({
+							accounts: [{ account_name: 'testuser', permission_name: 'active' }]
+						})
+					)
+				}
+			}
+		} as unknown as APIClient;
+
+		const accounts = await discoverAccountsFromPrivateKey(testPrivateKey, mockClient);
+
+		// Verify public key was derived correctly
+		expect(accounts[0].publicKey).toBe(testPublicKey);
+	});
+
+	test('handles single account with single permission', async () => {
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() =>
+						Promise.resolve({
+							accounts: [{ account_name: 'testuser', permission_name: 'claim' }]
+						})
+					)
+				}
+			}
+		} as unknown as APIClient;
+
+		const accounts = await discoverAccountsFromPrivateKey(testPrivateKey, mockClient);
+
+		expect(accounts).toHaveLength(1);
+		expect(accounts[0]).toEqual({
+			actor: 'testuser',
+			permission: 'claim',
+			publicKey: testPublicKey
+		});
+	});
+
+	test('handles account names as Name types (converts to string)', async () => {
+		const mockClient = {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() =>
+						Promise.resolve({
+							accounts: [
+								{
+									account_name: { toString: () => 'testuser1' }, // Name type
+									permission_name: { toString: () => 'active' } // Name type
+								}
+							]
+						})
+					)
+				}
+			}
+		} as unknown as APIClient;
+
+		const accounts = await discoverAccountsFromPrivateKey(testPrivateKey, mockClient);
+
+		// Should convert Name types to strings
+		expect(accounts[0].actor).toBe('testuser1');
+		expect(accounts[0].permission).toBe('active');
+		expect(typeof accounts[0].actor).toBe('string');
+		expect(typeof accounts[0].permission).toBe('string');
 	});
 });

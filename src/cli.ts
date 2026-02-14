@@ -8,7 +8,7 @@
  */
 
 import { Command } from 'commander';
-import { CLAIM_INTERVAL, SCRAP_API_URL, SYNC_INTERVAL } from './config';
+import { ACCOUNT_SYNC_INTERVAL, CLAIM_INTERVAL, SCRAP_API_URL, SYNC_INTERVAL } from './config';
 import { loadAccounts } from './lib/config';
 import { generalLog } from './lib/logger';
 import { ScrapMinerService } from './service';
@@ -33,20 +33,30 @@ export function prompt() {
 		.description('Start the scrapminer service with sync and claim schedulers (daemon mode)')
 		.option('--no-sync', 'Disable sync scheduler (hourly droplet fetch)')
 		.option('--no-claim', 'Disable claim scheduler (1-minute cache check)')
+		.option('--no-account-sync', 'Disable account sync scheduler (hourly account re-discovery)')
 		.option('--sync-interval <ms>', 'Sync interval in milliseconds', String(SYNC_INTERVAL))
 		.option(
 			'--claim-interval <ms>',
 			'Claim check interval in milliseconds',
 			String(CLAIM_INTERVAL)
 		)
+		.option(
+			'--account-sync-interval <ms>',
+			'Account sync interval in milliseconds',
+			String(ACCOUNT_SYNC_INTERVAL)
+		)
 		.action(async (options) => {
 			const service = new ScrapMinerService({
 				useSyncScheduler: options.sync !== false,
 				useClaimScheduler: options.claim !== false,
+				useAccountSyncScheduler: options.accountSync !== false,
 				syncInterval: options.syncInterval ? Number(options.syncInterval) : SYNC_INTERVAL,
 				claimInterval: options.claimInterval
 					? Number(options.claimInterval)
-					: CLAIM_INTERVAL
+					: CLAIM_INTERVAL,
+				accountSyncInterval: options.accountSyncInterval
+					? Number(options.accountSyncInterval)
+					: ACCOUNT_SYNC_INTERVAL
 			});
 
 			// Graceful shutdown handlers
@@ -95,6 +105,9 @@ export function prompt() {
 			console.log(`SCRAP API URL: ${SCRAP_API_URL}`);
 			console.log(`Sync Interval: ${SYNC_INTERVAL}ms (${SYNC_INTERVAL / 1000 / 60} minutes)`);
 			console.log(`Claim Interval: ${CLAIM_INTERVAL}ms (${CLAIM_INTERVAL / 1000} seconds)`);
+			console.log(
+				`Account Sync Interval: ${ACCOUNT_SYNC_INTERVAL}ms (${ACCOUNT_SYNC_INTERVAL / 1000 / 60} minutes)`
+			);
 			console.log(`\nConfigured Private Keys: ${accounts.length}`);
 			console.log('\nDiscovering accounts from private keys...\n');
 
@@ -110,10 +123,11 @@ export function prompt() {
 					);
 				}
 
-				generalLog.info('Configuration displayed', {
+				generalLog.debug('Configuration displayed', {
 					scrapApiUrl: SCRAP_API_URL,
 					syncInterval: SYNC_INTERVAL,
 					claimInterval: CLAIM_INTERVAL,
+					accountSyncInterval: ACCOUNT_SYNC_INTERVAL,
 					discoveredAccounts: sessions.map((s) => ({
 						actor: String(s.actor),
 						permission: String(s.permission)
@@ -224,6 +238,54 @@ export function prompt() {
 				generalLog.error('Setup command failed', { error: error.message });
 				process.exit(1);
 			}
+		});
+
+	// Destroy command - destroy droplets for an account
+	program
+		.command('destroy')
+		.description('Destroy droplets for an account (specify IDs or amount)')
+		.requiredOption('-a, --account <name>', 'Account name that owns the droplets')
+		.option('-d, --droplets <ids>', 'Comma-separated droplet IDs to destroy')
+		.option(
+			'-n, --amount <number>',
+			'Number of droplets to destroy (auto-fetches IDs from cache/API)'
+		)
+		.option('--memo <text>', 'Transaction memo')
+		.option(
+			'--notify <account>',
+			'Account to notify (default: scrap contract for token minting)'
+		)
+		.option('--dry-run', 'Force dry-run mode (preview without broadcasting)')
+		.option('--no-dry-run', 'Disable dry-run mode (broadcast transactions)')
+		.action(async (options) => {
+			// Validate: must provide either --droplets or --amount, but not both
+			if (!options.droplets && !options.amount) {
+				generalLog.error('Must specify either --droplets (IDs) or --amount (number)');
+				process.exit(1);
+			}
+			if (options.droplets && options.amount) {
+				generalLog.error('Cannot specify both --droplets and --amount (choose one)');
+				process.exit(1);
+			}
+			await ScrapMinerService.runDestroy(options);
+		});
+
+	// Generate command - generate new droplets for an account
+	program
+		.command('generate')
+		.description('Generate new droplets for an account')
+		.requiredOption('-a, --account <name>', 'Account name to generate droplets for')
+		.requiredOption('-n, --amount <number>', 'Number of droplets to generate')
+		.requiredOption('-t, --type <bound|unbound>', 'Droplet type (bound or unbound)')
+		.option(
+			'--data <string>',
+			'Custom data/hash for generation (auto-generated if not provided)'
+		)
+		.option('--notify <account>', 'Account to notify after generation')
+		.option('--dry-run', 'Force dry-run mode (preview without broadcasting)')
+		.option('--no-dry-run', 'Disable dry-run mode (broadcast transactions)')
+		.action(async (options) => {
+			await ScrapMinerService.runGenerate(options);
 		});
 
 	program.parse(process.argv);

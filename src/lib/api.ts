@@ -7,6 +7,19 @@ export interface DropletsResponse {
 	last_claim?: string;
 }
 
+export interface Droplet {
+	_id: string;
+	owner: string;
+	bound: boolean;
+	created: string;
+	[key: string]: any;
+}
+
+export interface DropletsListResponse {
+	droplets: Droplet[];
+	total: number;
+}
+
 export async function checkClaimable(account: string, config: Config): Promise<number> {
 	try {
 		const url = `${config.scrapApiUrl}/get/droplets?account=${account}`;
@@ -53,4 +66,44 @@ export async function getAccountDroplets(
 	await Promise.all(promises);
 
 	return results;
+}
+
+/**
+ * Fetch actual droplet IDs for an account from the API
+ * 
+ * @param account - Account name
+ * @param config - Configuration with API URL
+ * @param limit - Maximum number of droplets to fetch (default: 5000)
+ * @param skip - Number of droplets to skip (for pagination)
+ * @returns Array of droplet objects with IDs
+ */
+export async function fetchDropletIds(
+	account: string,
+	config: Config,
+	limit: number = 5000,
+	skip: number = 0
+): Promise<Droplet[]> {
+	try {
+		const url = `${config.scrapApiUrl}/get/droplets?account=${account}&limit=${limit}&skip=${skip}`;
+		logger.debug('Fetching droplet IDs', { account, limit, skip, url });
+
+		const response = await fetch(url);
+
+		if (!response.ok) {
+			throw new Error(`API returned ${response.status}: ${response.statusText}`);
+		}
+
+		const data = (await response.json()) as DropletsListResponse;
+
+		logger.debug('Received droplet list', {
+			account,
+			droplets: data.droplets.length,
+			total: data.total
+		});
+
+		return data.droplets || [];
+	} catch (error) {
+		logger.error('Failed to fetch droplet IDs', { account, error });
+		throw error;
+	}
 }

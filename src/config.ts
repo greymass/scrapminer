@@ -39,7 +39,10 @@ if (!SCRAP_API_URL.startsWith('ws://') && !SCRAP_API_URL.startsWith('wss://')) {
 // CLAIM CONFIGURATION
 // ============================================================================
 
-export const CLAIM_ENABLED = isENVTrue(process.env.CLAIM_ENABLED ?? 'false');
+// DRY_RUN controls whether transactions are broadcast (true = preview only, false = broadcast)
+// Defaults to true for safety - must explicitly set to false to broadcast
+export const DRY_RUN = isENVTrue(process.env.DRY_RUN ?? 'true');
+
 export const CLAIM_INTERVAL = process.env.CLAIM_INTERVAL
 	? Number(process.env.CLAIM_INTERVAL)
 	: 60000; // 1 minute default
@@ -55,10 +58,28 @@ export const AUTO_RECLAIM = isENVTrue(process.env.AUTO_RECLAIM ?? 'false');
 export const AUTO_GENERATE = isENVTrue(process.env.AUTO_GENERATE ?? 'false');
 export const BATCH_DELAY = process.env.BATCH_DELAY ? Number(process.env.BATCH_DELAY) : 5000; // milliseconds
 
-// Warn if claims are disabled (suppress for sync command)
+// ============================================================================
+// ACCOUNT SYNC CONFIGURATION
+// ============================================================================
+
+// Re-discover accounts from private keys to keep session list in sync with permission changes
+export const ACCOUNT_SYNC_INTERVAL = process.env.ACCOUNT_SYNC_INTERVAL
+	? Number(process.env.ACCOUNT_SYNC_INTERVAL)
+	: 3600000; // 1 hour default (same as droplet sync)
+export const ACCOUNT_SYNC_ON_STARTUP = isENVTrue(process.env.ACCOUNT_SYNC_ON_STARTUP ?? 'false'); // Disabled by default since initial discovery happens at startup
+
+// Warn if in dry-run mode (suppress for sync/destroy/generate commands that have their own warnings)
 const isSyncCommand = process.argv.includes('sync');
-if (!CLAIM_ENABLED && !isSyncCommand) {
-	console.warn('⚠️  WARNING: CLAIM_ENABLED=false (DRY RUN mode - transactions will not be broadcast)');
+const isDestroyCommand = process.argv.includes('destroy');
+const isGenerateCommand = process.argv.includes('generate');
+
+if (DRY_RUN && !isSyncCommand && !isDestroyCommand && !isGenerateCommand) {
+	console.warn('⚠️  WARNING: DRY_RUN=true (transactions will not be broadcast)');
+}
+
+// Warn for destroy/generate commands
+if (DRY_RUN && (isDestroyCommand || isGenerateCommand)) {
+	console.warn('⚠️  WARNING: DRY_RUN=true (transactions will not be broadcast unless --no-dry-run is specified)');
 }
 
 // ============================================================================

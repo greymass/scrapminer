@@ -1,357 +1,391 @@
 /**
  * Integration tests for src/lib/claimer.ts
  *
- * Tests claim logic with mocked Wharfkit sessions.
- * These tests verify the claiming workflow without making real blockchain calls.
+ * Tests claim orchestration logic with mocked dependencies.
+ * Low-level operations (batching, transactions, actions) are tested separately.
  */
 
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import type { Session } from '@wharfkit/session';
+import { createMockSession, MockSessionRecorder } from './mocks/session';
+import { createDroplets } from './helpers/fixtures';
+import type { Droplet } from '../src/lib/cache';
 
-// Mock types to simulate Wharfkit objects
-interface MockAction {
-	account: string;
-	name: string;
-	authorization: Array<{ actor: string; permission: string }>;
-	data: Record<string, unknown>;
-}
-
-interface MockTransactionResult {
-	transaction: {
-		id: string;
-	};
-	processed?: {
-		block_num: number;
-	};
-}
-
-class MockSession {
-	public actor: string;
-	public permission: string;
-
-	constructor(actor: string, permission: string) {
-		this.actor = actor;
-		this.permission = permission;
+/**
+ * Mock dependencies before importing claimer
+ */
+const mockProcessBatches = mock(async (items: any[], processor: any, options: any) => {
+	// Default: process all items successfully
+	const results = [];
+	for (let i = 0; i < items.length; i += (options.batchSize || 2500)) {
+		const batch = items.slice(i, i + (options.batchSize || 2500));
+		const batchNum = Math.floor(i / (options.batchSize || 2500)) + 1;
+		const totalBatches = Math.ceil(items.length / (options.batchSize || 2500));
+		
+		const result = await processor(batch, batchNum, totalBatches);
+		results.push(result);
 	}
-
-	async transact(args: { action: MockAction }): Promise<MockTransactionResult> {
-		// Simulate successful transaction
-		return {
-			transaction: {
-				id: `mock-tx-${Date.now()}`
-			},
-			processed: {
-				block_num: 12345
-			}
-		};
-	}
-}
-
-// Mock ScrapWebSocket
-class MockScrapWebSocket {
-	private droplets: Map<string, Array<{ id: number; revealed: boolean }>> = new Map();
-
-	constructor() {
-		// Initialize with test data
-		this.droplets.set('testaccount1', [
-			{ id: 1, revealed: false },
-			{ id: 2, revealed: false },
-			{ id: 3, revealed: true }
-		]);
-
-		this.droplets.set('testaccount2', [{ id: 4, revealed: true }, { id: 5, revealed: true }]);
-	}
-
-	getDroplets(account: string): Array<{ id: number; revealed: boolean }> {
-		return this.droplets.get(account) || [];
-	}
-
-	getUnrevealedDroplets(account: string): number[] {
-		const accountDroplets = this.droplets.get(account) || [];
-		return accountDroplets.filter((d) => !d.revealed).map((d) => d.id);
-	}
-
-	getRevealedDroplets(account: string): number[] {
-		const accountDroplets = this.droplets.get(account) || [];
-		return accountDroplets.filter((d) => d.revealed).map((d) => d.id);
-	}
-}
-
-describe('Claimer: Droplet Filtering', () => {
-	test('identifies unrevealed droplets', () => {
-		const ws = new MockScrapWebSocket();
-		const unrevealed = ws.getUnrevealedDroplets('testaccount1');
-
-		expect(unrevealed).toHaveLength(2);
-		expect(unrevealed).toContain(1);
-		expect(unrevealed).toContain(2);
-		expect(unrevealed).not.toContain(3);
-	});
-
-	test('identifies revealed droplets', () => {
-		const ws = new MockScrapWebSocket();
-		const revealed = ws.getRevealedDroplets('testaccount1');
-
-		expect(revealed).toHaveLength(1);
-		expect(revealed).toContain(3);
-	});
-
-	test('handles accounts with no droplets', () => {
-		const ws = new MockScrapWebSocket();
-		const droplets = ws.getDroplets('nonexistent');
-
-		expect(droplets).toHaveLength(0);
-	});
-
-	test('handles accounts with only revealed droplets', () => {
-		const ws = new MockScrapWebSocket();
-		const unrevealed = ws.getUnrevealedDroplets('testaccount2');
-		const revealed = ws.getRevealedDroplets('testaccount2');
-
-		expect(unrevealed).toHaveLength(0);
-		expect(revealed).toHaveLength(2);
-	});
+	return results;
 });
 
-describe('Claimer: Batch Processing', () => {
-	test('splits large droplet arrays into batches', () => {
-		const dropletIds = Array.from({ length: 5000 }, (_, i) => i + 1);
-		const batchSize = 2500;
-		const batches: number[][] = [];
+const mockExecuteTransactionOrThrow = mock(async (session: Session, actions: any[], options: any) => {
+	if (!options.broadcast) {
+		return null; // DRY_RUN mode
+	}
+	return `tx-${Date.now()}`;
+});
 
-		// Simulate batching logic
-		for (let i = 0; i < dropletIds.length; i += batchSize) {
-			batches.push(dropletIds.slice(i, i + batchSize));
-		}
+const mockBuildDestroyAction = mock((actor: any, dropletIds: string[], options?: any) => ({
+	account: 'drops',
+	name: 'destroy',
+	authorization: [{ actor: String(actor), permission: 'claim' }],
+	data: { owner: String(actor), ids: dropletIds, memo: options?.memo || '' },
+}));
 
-		expect(batches).toHaveLength(2);
-		expect(batches[0]).toHaveLength(2500);
-		expect(batches[1]).toHaveLength(2500);
-		expect(batches[0][0]).toBe(1);
-		expect(batches[1][0]).toBe(2501);
+const mockBuildDestroyAndRegenerateActions = mock((actor: any, droplets: Droplet[], options?: any) => {
+	const boundIds = droplets.filter(d => d.bound).map(d => d._id);
+	const unboundIds = droplets.filter(d => !d.bound).map(d => d._id);
+	
+	return [
+		{
+			account: 'drops',
+			name: 'destroy',
+			authorization: [{ actor: String(actor), permission: 'claim' }],
+			data: { owner: String(actor), ids: droplets.map(d => d._id), memo: options?.memo || '' },
+		},
+		{
+			account: 'drops',
+			name: 'generate',
+			authorization: [{ actor: String(actor), permission: 'claim' }],
+			data: { owner: String(actor), bound_drops: boundIds.length, unbound_drops: unboundIds.length },
+		},
+	];
+});
+
+// Mock modules
+mock.module('../src/lib/batch', () => ({
+	processBatches: mockProcessBatches,
+}));
+
+mock.module('../src/lib/transaction', () => ({
+	executeTransactionOrThrow: mockExecuteTransactionOrThrow,
+}));
+
+mock.module('../src/lib/actions/drops', () => ({
+	buildDestroyAction: mockBuildDestroyAction,
+	buildDestroyAndRegenerateActions: mockBuildDestroyAndRegenerateActions,
+}));
+
+// Import after mocking
+const { claimForAccount, claimFromCache } = await import('../src/lib/claimer');
+
+describe('claimForAccount', () => {
+	let session: Session;
+
+	beforeEach(() => {
+		session = createMockSession({ actor: 'testaccount' });
+		
+		// Reset all mocks
+		mockProcessBatches.mockClear();
+		mockExecuteTransactionOrThrow.mockClear();
+		mockBuildDestroyAction.mockClear();
+		mockBuildDestroyAndRegenerateActions.mockClear();
 	});
 
-	test('handles droplet count less than batch size', () => {
-		const dropletIds = [1, 2, 3, 4, 5];
-		const batchSize = 2500;
-		const batches: number[][] = [];
-
-		for (let i = 0; i < dropletIds.length; i += batchSize) {
-			batches.push(dropletIds.slice(i, i + batchSize));
-		}
-
-		expect(batches).toHaveLength(1);
-		expect(batches[0]).toHaveLength(5);
+	test('returns empty array when no droplets provided', async () => {
+		const result = await claimForAccount(session, []);
+		
+		expect(result).toEqual([]);
+		expect(mockProcessBatches).not.toHaveBeenCalled();
 	});
 
-	test('handles exact multiple of batch size', () => {
-		const dropletIds = Array.from({ length: 5000 }, (_, i) => i + 1);
-		const batchSize = 1000;
-		const batches: number[][] = [];
+	test('claims droplets successfully (AUTO_GENERATE disabled)', async () => {
+		// Mock config: AUTO_GENERATE = false, DRY_RUN = false
+		mock.module('../src/config', () => ({
+			AUTO_GENERATE: false,
+			AUTO_RECLAIM: true,
+			DRY_RUN: false,
+			BATCH_DELAY: 0,
+		}));
 
-		for (let i = 0; i < dropletIds.length; i += batchSize) {
-			batches.push(dropletIds.slice(i, i + batchSize));
-		}
+		const droplets = createDroplets(3, { owner: 'testaccount', bound: true });
+		const result = await claimForAccount(session, droplets);
 
-		expect(batches).toHaveLength(5);
-		batches.forEach((batch) => {
-			expect(batch).toHaveLength(1000);
+		expect(result).toHaveLength(3);
+		expect(result).toEqual(['1', '2', '3']);
+		
+		// Should call processBatches once
+		expect(mockProcessBatches).toHaveBeenCalledTimes(1);
+		
+		// Should use buildDestroyAction (not regenerate)
+		expect(mockBuildDestroyAction).toHaveBeenCalled();
+		expect(mockBuildDestroyAndRegenerateActions).not.toHaveBeenCalled();
+	});
+
+	test('claims droplets with AUTO_GENERATE enabled', async () => {
+		// Mock config: AUTO_GENERATE = true
+		mock.module('../src/config', () => ({
+			AUTO_GENERATE: true,
+			AUTO_RECLAIM: true,
+			DRY_RUN: false,
+			BATCH_DELAY: 0,
+		}));
+
+		const droplets = createDroplets(3, { owner: 'testaccount', bound: true });
+		const result = await claimForAccount(session, droplets);
+
+		expect(result).toHaveLength(3);
+		
+		// Should use buildDestroyAndRegenerateActions
+		expect(mockBuildDestroyAndRegenerateActions).toHaveBeenCalled();
+		expect(mockBuildDestroyAction).not.toHaveBeenCalled();
+	});
+
+	test('respects DRY_RUN mode', async () => {
+		// Mock config: DRY_RUN = true
+		mock.module('../src/config', () => ({
+			AUTO_GENERATE: false,
+			AUTO_RECLAIM: true,
+			DRY_RUN: true,
+			BATCH_DELAY: 0,
+		}));
+
+		const droplets = createDroplets(3, { owner: 'testaccount', bound: true });
+		const result = await claimForAccount(session, droplets);
+
+		expect(result).toHaveLength(3);
+		
+		// Should pass broadcast: false to executeTransaction
+		expect(mockExecuteTransactionOrThrow).toHaveBeenCalledWith(
+			session,
+			expect.any(Array),
+			expect.objectContaining({ broadcast: false })
+		);
+	});
+
+	test('handles AUTO_RECLAIM disabled after first batch', async () => {
+		// Mock config: AUTO_RECLAIM = false
+		mock.module('../src/config', () => ({
+			AUTO_GENERATE: false,
+			AUTO_RECLAIM: false,
+			DRY_RUN: false,
+			BATCH_DELAY: 0,
+		}));
+
+		// Create enough droplets for 2 batches (2500+ each)
+		const droplets = createDroplets(5000, { owner: 'testaccount', bound: true });
+		
+		// Mock processBatches to simulate AUTO_RECLAIM check
+		mockProcessBatches.mockImplementationOnce(async (items: any[], processor: any) => {
+			const batch1 = items.slice(0, 2500);
+			await processor(batch1, 1, 2);
+			
+			// Simulate AUTO_RECLAIM_DISABLED error on second batch
+			throw new Error('AUTO_RECLAIM_DISABLED');
 		});
+
+		const result = await claimForAccount(session, droplets);
+
+		// Should return claimed IDs from first batch only
+		expect(result.length).toBeGreaterThan(0);
+		expect(result.length).toBeLessThan(5000);
+	});
+
+	test('handles transaction errors gracefully', async () => {
+		// Mock executeTransaction to throw error
+		mockExecuteTransactionOrThrow.mockRejectedValueOnce(new Error('Insufficient CPU'));
+
+		const droplets = createDroplets(3, { owner: 'testaccount', bound: true });
+		const result = await claimForAccount(session, droplets);
+
+		// Should return empty array on error
+		expect(result).toEqual([]);
+	});
+
+	test('processes multiple batches correctly', async () => {
+		// Mock config: AUTO_RECLAIM = true to allow multiple batches
+		mock.module('../src/config', () => ({
+			AUTO_GENERATE: false,
+			AUTO_RECLAIM: true, // MUST be true for multi-batch
+			DRY_RUN: false,
+			BATCH_DELAY: 0,
+		}));
+
+		const droplets = createDroplets(5000, { owner: 'testaccount', bound: true });
+		
+		// Mock batch processing to track batch numbers
+		const batchNumbers: number[] = [];
+		mockProcessBatches.mockImplementationOnce(async (items: any[], processor: any) => {
+			for (let i = 0; i < items.length; i += 2500) {
+				const batch = items.slice(i, i + 2500);
+				const batchNum = Math.floor(i / 2500) + 1;
+				const totalBatches = Math.ceil(items.length / 2500);
+				
+				batchNumbers.push(batchNum);
+				await processor(batch, batchNum, totalBatches);
+			}
+			return [];
+		});
+
+		const result = await claimForAccount(session, droplets);
+
+		expect(batchNumbers).toEqual([1, 2]);
+		expect(result).toHaveLength(5000);
+	});
+
+	test('includes batch number in action memo', async () => {
+		const droplets = createDroplets(3, { owner: 'testaccount', bound: true });
+		await claimForAccount(session, droplets);
+
+		// Check that buildDestroyAction was called with memo containing batch number
+		expect(mockBuildDestroyAction).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.anything(),
+			expect.objectContaining({ memo: expect.stringContaining('batch') })
+		);
 	});
 });
 
-describe('Claimer: Transaction Building', () => {
-	test('builds destroy action correctly', async () => {
-		const session = new MockSession('testaccount1', 'claim');
-		const dropletIds = [1, 2, 3];
-
-		// Mock action structure
-		const action: MockAction = {
-			account: 'drops',
-			name: 'destroy',
-			authorization: [{ actor: 'testaccount1', permission: 'claim' }],
-			data: {
-				owner: 'testaccount1',
-				ids: dropletIds
-			}
-		};
-
-		expect(action.account).toBe('drops');
-		expect(action.name).toBe('destroy');
-		expect(action.authorization[0].actor).toBe('testaccount1');
-		expect(action.authorization[0].permission).toBe('claim');
-		expect(action.data.owner).toBe('testaccount1');
-		expect(action.data.ids).toEqual(dropletIds);
+describe('claimFromCache', () => {
+	beforeEach(() => {
+		// Reset mocks
+		mockProcessBatches.mockClear();
+		mockExecuteTransactionOrThrow.mockClear();
 	});
 
-	test('builds claim action correctly', async () => {
-		const session = new MockSession('testaccount1', 'claim');
+	test('skips claiming when no droplets in cache', async () => {
+		// Mock empty cache
+		mock.module('../src/lib/cache', () => ({
+			dropletCache: {
+				getStats: () => ({}),
+				get: () => [],
+				remove: mock(() => {}),
+			},
+		}));
 
-		// Mock claim action structure
-		const action: MockAction = {
-			account: 'drops',
-			name: 'claim',
-			authorization: [{ actor: 'testaccount1', permission: 'claim' }],
-			data: {
-				owner: 'testaccount1'
-			}
-		};
+		const sessions = [createMockSession({ actor: 'testaccount1' })];
+		await claimFromCache(sessions);
 
-		expect(action.account).toBe('drops');
-		expect(action.name).toBe('claim');
-		expect(action.data.owner).toBe('testaccount1');
+		// Should not process any batches
+		expect(mockProcessBatches).not.toHaveBeenCalled();
 	});
 
-	test('executes transaction successfully', async () => {
-		const session = new MockSession('testaccount1', 'claim');
+	test('claims droplets for accounts in cache', async () => {
+		const testDroplets = createDroplets(3, { owner: 'testaccount1', bound: true });
+		const mockRemove = mock(() => {});
 
-		const action: MockAction = {
-			account: 'drops',
-			name: 'destroy',
-			authorization: [{ actor: 'testaccount1', permission: 'claim' }],
-			data: { owner: 'testaccount1', ids: [1, 2, 3] }
-		};
+		// Mock cache with droplets
+		mock.module('../src/lib/cache', () => ({
+			dropletCache: {
+				getStats: () => ({
+					testaccount1: { count: 3, bound: 3, unbound: 0 },
+				}),
+				get: (account: string) => (account === 'testaccount1' ? testDroplets : []),
+				remove: mockRemove,
+			},
+		}));
 
-		const result = await session.transact({ action });
+		const sessions = [createMockSession({ actor: 'testaccount1' })];
+		await claimFromCache(sessions);
 
-		expect(result.transaction.id).toBeDefined();
-		expect(result.transaction.id).toContain('mock-tx-');
-		expect(result.processed?.block_num).toBe(12345);
-	});
-});
-
-describe('Claimer: Error Handling', () => {
-	test('handles account with no droplets gracefully', () => {
-		const ws = new MockScrapWebSocket();
-		const droplets = ws.getDroplets('nonexistent');
-
-		// Should not throw, just return empty array
-		expect(droplets).toHaveLength(0);
-		expect(() => ws.getUnrevealedDroplets('nonexistent')).not.toThrow();
+		// Should process batches
+		expect(mockProcessBatches).toHaveBeenCalled();
+		
+		// Should remove claimed droplets from cache
+		expect(mockRemove).toHaveBeenCalledWith('testaccount1', expect.arrayContaining(['1', '2', '3']));
 	});
 
-	test('handles failed transaction', async () => {
-		const session = new MockSession('testaccount1', 'claim');
+	test('processes multiple accounts sequentially', async () => {
+		const droplets1 = createDroplets(2, { owner: 'testaccount1', bound: true });
+		const droplets2 = createDroplets(2, { owner: 'testaccount2', bound: true });
 
-		// Mock failed transaction
-		const failedTransact = async () => {
-			throw new Error('Insufficient CPU');
-		};
+		// Mock cache with droplets for both accounts
+		mock.module('../src/lib/cache', () => ({
+			dropletCache: {
+				getStats: () => ({
+					testaccount1: { count: 2, bound: 2, unbound: 0 },
+					testaccount2: { count: 2, bound: 2, unbound: 0 },
+				}),
+				get: (account: string) => {
+					if (account === 'testaccount1') return droplets1;
+					if (account === 'testaccount2') return droplets2;
+					return [];
+				},
+				remove: mock(() => {}),
+			},
+		}));
 
-		try {
-			await failedTransact();
-			expect(true).toBe(false); // Should not reach here
-		} catch (error) {
-			expect(error).toBeDefined();
-			expect((error as Error).message).toBe('Insufficient CPU');
-		}
-	});
-
-	test('continues processing other accounts after one fails', async () => {
 		const sessions = [
-			new MockSession('testaccount1', 'claim'),
-			new MockSession('testaccount2', 'claim'),
-			new MockSession('testaccount3', 'claim')
+			createMockSession({ actor: 'testaccount1' }),
+			createMockSession({ actor: 'testaccount2' }),
 		];
 
-		const results: Array<{ account: string; success: boolean }> = [];
+		await claimFromCache(sessions);
 
-		// Simulate processing where account2 fails
-		for (const session of sessions) {
-			try {
-				if (session.actor === 'testaccount2') {
-					throw new Error('Account2 failed');
-				}
-				await session.transact({
-					action: {
-						account: 'drops',
-						name: 'claim',
-						authorization: [{ actor: session.actor, permission: session.permission }],
-						data: { owner: session.actor }
-					}
-				});
-				results.push({ account: session.actor, success: true });
-			} catch (error) {
-				results.push({ account: session.actor, success: false });
+		// Should process batches for both accounts
+		expect(mockProcessBatches).toHaveBeenCalledTimes(2);
+	});
+
+	test('continues processing after account failure', async () => {
+		const droplets = createDroplets(2, { bound: true });
+
+		// Mock cache
+		mock.module('../src/lib/cache', () => ({
+			dropletCache: {
+				getStats: () => ({
+					testaccount1: { count: 2, bound: 2, unbound: 0 },
+					testaccount2: { count: 2, bound: 2, unbound: 0 },
+				}),
+				get: (account: string) => droplets,
+				remove: mock(() => {}),
+			},
+		}));
+
+		// Mock processBatches to fail for first account
+		let callCount = 0;
+		mockProcessBatches.mockImplementation(async () => {
+			callCount++;
+			if (callCount === 1) {
+				throw new Error('First account failed');
 			}
-		}
+			return [];
+		});
 
-		expect(results).toHaveLength(3);
-		expect(results[0].success).toBe(true);
-		expect(results[1].success).toBe(false);
-		expect(results[2].success).toBe(true);
-	});
-});
+		const sessions = [
+			createMockSession({ actor: 'testaccount1' }),
+			createMockSession({ actor: 'testaccount2' }),
+		];
 
-describe('Claimer: Workflow Integration', () => {
-	test('complete claim workflow for single account', async () => {
-		const session = new MockSession('testaccount1', 'claim');
-		const ws = new MockScrapWebSocket();
+		await claimFromCache(sessions);
 
-		// 1. Get revealed droplets
-		const revealed = ws.getRevealedDroplets('testaccount1');
-		expect(revealed).toHaveLength(1);
-
-		// 2. Build destroy action
-		const destroyAction: MockAction = {
-			account: 'drops',
-			name: 'destroy',
-			authorization: [{ actor: 'testaccount1', permission: 'claim' }],
-			data: { owner: 'testaccount1', ids: revealed }
-		};
-
-		// 3. Execute destroy transaction
-		const destroyResult = await session.transact({ action: destroyAction });
-		expect(destroyResult.transaction.id).toBeDefined();
-
-		// 4. Build claim action
-		const claimAction: MockAction = {
-			account: 'drops',
-			name: 'claim',
-			authorization: [{ actor: 'testaccount1', permission: 'claim' }],
-			data: { owner: 'testaccount1' }
-		};
-
-		// 5. Execute claim transaction
-		const claimResult = await session.transact({ action: claimAction });
-		expect(claimResult.transaction.id).toBeDefined();
+		// Should attempt both accounts
+		expect(mockProcessBatches).toHaveBeenCalledTimes(2);
 	});
 
-	test('skips accounts with no revealed droplets', () => {
-		const ws = new MockScrapWebSocket();
-		const revealed = ws.getRevealedDroplets('testaccount2');
+	test('skips accounts with no droplets', async () => {
+		// Mock cache with mixed accounts
+		mock.module('../src/lib/cache', () => ({
+			dropletCache: {
+				getStats: () => ({
+					testaccount1: { count: 3, bound: 3, unbound: 0 },
+					testaccount2: { count: 0, bound: 0, unbound: 0 }, // No droplets
+				}),
+				get: (account: string) => {
+					if (account === 'testaccount1') return createDroplets(3, { bound: true });
+					return [];
+				},
+				remove: mock(() => {}),
+			},
+		}));
 
-		// testaccount2 has only revealed droplets (no need to destroy)
-		expect(revealed).toHaveLength(2);
+		const sessions = [
+			createMockSession({ actor: 'testaccount1' }),
+			createMockSession({ actor: 'testaccount2' }),
+		];
 
-		// But if we're checking for AUTO_RECLAIM, this would trigger destroy
-		const shouldDestroy = revealed.length > 0;
-		expect(shouldDestroy).toBe(true);
-	});
+		await claimFromCache(sessions);
 
-	test('handles batch processing with delays', async () => {
-		const dropletIds = Array.from({ length: 5000 }, (_, i) => i + 1);
-		const batchSize = 2500;
-		const batchDelay = 100; // ms
-
-		const startTime = Date.now();
-		const results: string[] = [];
-
-		for (let i = 0; i < dropletIds.length; i += batchSize) {
-			const batch = dropletIds.slice(i, i + batchSize);
-			const batchNum = Math.floor(i / batchSize) + 1;
-
-			// Simulate processing
-			results.push(`Batch ${batchNum}: ${batch.length} droplets`);
-
-			// Add delay between batches
-			if (i + batchSize < dropletIds.length) {
-				await new Promise((resolve) => setTimeout(resolve, batchDelay));
-			}
-		}
-
-		const duration = Date.now() - startTime;
-
-		expect(results).toHaveLength(2);
-		expect(duration).toBeGreaterThanOrEqual(batchDelay); // At least one delay
+		// Should only process testaccount1
+		expect(mockProcessBatches).toHaveBeenCalledTimes(1);
 	});
 });

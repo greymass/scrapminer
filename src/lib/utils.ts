@@ -7,6 +7,7 @@
 
 import type { ABISerializable, APIClient } from '@wharfkit/antelope';
 import { PrivateKey } from '@wharfkit/antelope';
+import { logger } from './logger';
 
 /**
  * Convert Wharfkit types to plain JSON objects for logging
@@ -86,10 +87,10 @@ export async function discoverAccountsFromPrivateKey(
 		}
 
 		// Log discovered accounts
-		console.log(
-			`Found ${accounts.length} account/permission(s) for key:`,
-			accounts.map((acc) => `${acc.actor}@${acc.permission}`)
-		);
+		logger.debug('Discovered accounts from private key', {
+			count: accounts.length,
+			accounts: accounts.map((acc) => `${acc.actor}@${acc.permission}`)
+		});
 
 		return accounts;
 	} catch (error) {

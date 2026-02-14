@@ -9,30 +9,38 @@
 import type { Session } from '@wharfkit/session';
 import { AsyncTask, SimpleIntervalJob, ToadScheduler } from 'toad-scheduler';
 import {
+	ACCOUNT_SYNC_INTERVAL,
+	ACCOUNT_SYNC_ON_STARTUP,
 	AUTO_RECLAIM,
 	BATCH_DELAY,
 	CLAIM_INTERVAL,
+	DRY_RUN,
 	SCRAP_API_URL,
 	SYNC_INTERVAL,
 	SYNC_ON_STARTUP,
 	SYNC_TIMEOUT
 } from './config';
+import { applySyncResults, syncAccounts } from './lib/account-sync';
 import { claimFromCache } from './lib/claimer';
+import { dropletCache } from './lib/cache';
 import { type AccountConfig, loadAccounts, validateConfig } from './lib/config';
-import { claimerLog, generalLog, syncLog } from './lib/logger';
+import { claimerLog, configLog, generalLog, syncLog } from './lib/logger';
 import { syncAllAccounts } from './lib/sync';
 import { createSessions } from './lib/wharf';
 
 export interface ServiceOptions {
 	useSyncScheduler?: boolean;
 	useClaimScheduler?: boolean;
+	useAccountSyncScheduler?: boolean;
 	syncInterval?: number;
 	claimInterval?: number;
+	accountSyncInterval?: number;
 }
 
 export class ScrapMinerService {
 	private syncScheduler?: ToadScheduler;
 	private claimScheduler?: ToadScheduler;
+	private accountSyncScheduler?: ToadScheduler;
 	private sessions?: Session[];
 	private accounts: AccountConfig[];
 	private options: Required<ServiceOptions>;
@@ -47,8 +55,10 @@ export class ScrapMinerService {
 		this.options = {
 			useSyncScheduler: options.useSyncScheduler ?? true,
 			useClaimScheduler: options.useClaimScheduler ?? true,
+			useAccountSyncScheduler: options.useAccountSyncScheduler ?? true,
 			syncInterval: options.syncInterval ?? SYNC_INTERVAL,
-			claimInterval: options.claimInterval ?? CLAIM_INTERVAL
+			claimInterval: options.claimInterval ?? CLAIM_INTERVAL,
+			accountSyncInterval: options.accountSyncInterval ?? ACCOUNT_SYNC_INTERVAL
 		};
 	}
 
@@ -93,6 +103,83 @@ export class ScrapMinerService {
 			await claimFromCache(this.sessions);
 		} catch (error) {
 			claimerLog.error('Claim failed', { error: error.message });
+		}
+	}
+
+	/**
+	 * Account sync cycle - re-discovers accounts from private keys and updates session list
+	 * 
+	 * This ensures the session list stays in sync with blockchain permission changes:
+	 * - Removes sessions for accounts that lost the claim permission
+	 * - Adds sessions for accounts that gained the claim permission
+	 * - Handles new accounts that now have the private key configured
+	 */
+	async runAccountSyncCycle(): Promise<void> {
+		if (!this.sessions) {
+			throw new Error('Sessions not initialized. Call start() first.');
+		}
+
+		try {
+			configLog.debug('Starting account sync', {
+				currentSessions: this.sessions.length
+			});
+
+			// Discover current state of accounts
+			const syncResult = await syncAccounts(this.accounts, this.sessions, 'claim');
+
+			if (!syncResult.hasChanges) {
+				configLog.debug('No account changes detected');
+				return;
+			}
+
+			// Log changes
+			if (syncResult.added.length > 0) {
+				configLog.info('New accounts discovered', {
+					count: syncResult.added.length,
+					accounts: syncResult.added.map((a) => `${a.actor}@${a.permission}`)
+				});
+			}
+
+			if (syncResult.removed.length > 0) {
+				configLog.warn('Accounts removed', {
+					count: syncResult.removed.length,
+					reason: 'lost claim permission',
+					accounts: syncResult.removed.map((a) => `${a.actor}@${a.permission}`)
+				});
+			}
+
+		// Apply changes to session list
+		const sessionsBefore = this.sessions.length;
+		applySyncResults(this.sessions, this.accounts, syncResult);
+
+		// Sync droplets for newly added accounts
+		if (syncResult.added.length > 0) {
+			configLog.debug('Syncing droplets for newly added accounts', {
+				count: syncResult.added.length
+			});
+
+			// Get the new sessions that were just added
+			const newSessions = this.sessions.slice(sessionsBefore);
+			
+			try {
+				const { syncAllAccounts } = await import('./lib/sync');
+				await syncAllAccounts(newSessions);
+			} catch (error) {
+				configLog.error('Failed to sync new accounts', {
+					error: error.message,
+					accounts: syncResult.added.map((a) => a.actor)
+				});
+			}
+		}
+
+		configLog.info('Account sync complete', {
+			previous: syncResult.unchanged.length + syncResult.removed.length,
+			current: this.sessions.length,
+			added: syncResult.added.length,
+			removed: syncResult.removed.length
+		});
+		} catch (error) {
+			configLog.error('Account sync failed', { error: error.message });
 		}
 	}
 
@@ -155,6 +242,35 @@ export class ScrapMinerService {
 	}
 
 	/**
+	 * Initialize account sync scheduler - periodically re-discovers accounts from private keys
+	 */
+	private initAccountSyncScheduler(): void {
+		if (!this.options.useAccountSyncScheduler) {
+			return;
+		}
+
+		this.accountSyncScheduler = new ToadScheduler();
+		const accountSyncTask = new AsyncTask('sync-accounts', () => this.runAccountSyncCycle());
+		const accountSyncJob = new SimpleIntervalJob(
+			{
+				milliseconds: this.options.accountSyncInterval,
+				runImmediately: ACCOUNT_SYNC_ON_STARTUP
+			},
+			accountSyncTask,
+			{
+				id: 'sync-accounts',
+				preventOverrun: true // Critical: prevents overlapping executions
+			}
+		);
+
+		this.accountSyncScheduler.addSimpleIntervalJob(accountSyncJob);
+		configLog.debug('Account sync scheduler started', {
+			interval: this.options.accountSyncInterval,
+			intervalMinutes: this.options.accountSyncInterval / 1000 / 60
+		});
+	}
+
+	/**
 	 * Start the service with two independent schedulers
 	 */
 	async start(): Promise<void> {
@@ -186,6 +302,9 @@ export class ScrapMinerService {
 			// Initialize claim scheduler (1-minute cache check)
 			this.initClaimScheduler();
 
+			// Initialize account sync scheduler (hourly account re-discovery)
+			this.initAccountSyncScheduler();
+
 			generalLog.info('✅ Service started - monitoring for droplets');
 
 			// If sync runs on startup, trigger an immediate claim check after a short delay
@@ -216,6 +335,11 @@ export class ScrapMinerService {
 		if (this.claimScheduler) {
 			this.claimScheduler.stop();
 			claimerLog.debug('Claim scheduler stopped');
+		}
+
+		if (this.accountSyncScheduler) {
+			this.accountSyncScheduler.stop();
+			configLog.debug('Account sync scheduler stopped');
 		}
 
 		// Close websocket connection
@@ -412,6 +536,200 @@ export class ScrapMinerService {
 		} catch (error) {
 			console.error('Error syncing droplets:', error.message);
 			closeWebSocket();
+			process.exit(1);
+		}
+	}
+
+	/**
+	 * Destroy droplets for a specific account
+	 */
+	static async runDestroy(options: {
+		account: string;
+		droplets?: string;
+		amount?: string;
+		memo?: string;
+		notify?: string;
+		dryRun?: boolean;
+		noDryRun?: boolean;
+	}): Promise<void> {
+		// Determine dry-run mode: CLI flag takes precedence over env var
+		const dryRun = options.noDryRun ? false : (options.dryRun ?? DRY_RUN);
+
+		const mode = options.droplets ? 'by-ids' : 'by-amount';
+		const count = options.droplets 
+			? options.droplets.split(',').length 
+			: Number(options.amount);
+
+		generalLog.info('🎯 Destroy mode: destroying droplets', {
+			account: options.account,
+			mode,
+			count,
+			dryRun
+		});
+
+		try {
+			// Load accounts and create sessions
+			const accounts = loadAccounts();
+			const sessions = await createSessions(accounts);
+
+			// Find session matching target account
+			const targetSession = sessions.find(
+				(s) => String(s.actor) === options.account
+			);
+
+			if (!targetSession) {
+				generalLog.error('❌ No private key configured for account', {
+					account: options.account,
+					configuredAccounts: sessions.map((s) => String(s.actor))
+				});
+				console.error(`\nError: No private key configured for account '${options.account}'`);
+				console.error('Configured accounts:', sessions.map((s) => String(s.actor)).join(', '));
+				console.error('\nRun "scrapminer config" to see all configured accounts\n');
+				process.exit(1);
+			}
+
+			let txIds: string[];
+			let dropletsDestroyed: number;
+
+			if (options.droplets) {
+				// Mode 1: Destroy specific droplet IDs
+				const dropletIds = options.droplets.split(',').map((id) => id.trim());
+				
+				const { destroyDroplets } = await import('./lib/operations');
+				txIds = await destroyDroplets(targetSession, dropletIds, {
+					memo: options.memo,
+					toNotify: options.notify,
+					dryRun
+				});
+				dropletsDestroyed = dropletIds.length;
+			} else {
+				// Mode 2: Destroy by amount (auto-fetch IDs)
+				const amount = Number(options.amount);
+				if (Number.isNaN(amount) || amount <= 0) {
+					throw new Error('Amount must be a positive number');
+				}
+
+				const config = {
+					scrapApiUrl: SCRAP_API_URL,
+					dropsContract: DROPS_CONTRACT,
+					scrapContract: SCRAP_CONTRACT,
+					dryRun: DRY_RUN,
+					autoGenerate: AUTO_GENERATE,
+					autoReclaim: AUTO_RECLAIM,
+					claimInterval: CLAIM_INTERVAL
+				};
+
+				const { destroyDropletsByAmount } = await import('./lib/operations');
+				txIds = await destroyDropletsByAmount(targetSession, amount, config, {
+					memo: options.memo,
+					toNotify: options.notify,
+					dryRun
+				});
+				dropletsDestroyed = amount;
+			}
+
+			// Output results
+			if (txIds.length === 0 && dryRun) {
+				console.log('\n✅ Dry-run complete - no transactions broadcast\n');
+			} else if (txIds.length === 1) {
+				console.log(`\n✅ Destroyed ${dropletsDestroyed} droplets`);
+				console.log(`   Transaction: ${txIds[0]}\n`);
+			} else if (txIds.length > 1) {
+				console.log(`\n✅ Destroyed ${dropletsDestroyed} droplets in ${txIds.length} batches`);
+				console.log(`   Transactions: ${txIds.join(', ')}\n`);
+			}
+
+			process.exit(0);
+		} catch (error) {
+			generalLog.error('❌ Destroy operation failed', {
+				error: error.message
+			});
+			console.error(`\nError: ${error.message}\n`);
+			process.exit(1);
+		}
+	}
+
+	/**
+	 * Generate droplets for a specific account
+	 */
+	static async runGenerate(options: {
+		account: string;
+		amount: string;
+		type: string;
+		data?: string;
+		notify?: string;
+		dryRun?: boolean;
+		noDryRun?: boolean;
+	}): Promise<void> {
+		// Determine dry-run mode: CLI flag takes precedence over env var
+		const dryRun = options.noDryRun ? false : (options.dryRun ?? DRY_RUN);
+
+		generalLog.info('🎯 Generate mode: generating droplets', {
+			account: options.account,
+			amount: options.amount,
+			type: options.type,
+			dryRun
+		});
+
+		try {
+			// Validate type
+			if (options.type !== 'bound' && options.type !== 'unbound') {
+				throw new Error('Type must be "bound" or "unbound"');
+			}
+
+			// Parse amount
+			const amount = Number(options.amount);
+			if (Number.isNaN(amount) || amount <= 0) {
+				throw new Error('Amount must be a positive number');
+			}
+
+			const bound = options.type === 'bound';
+
+			// Load accounts and create sessions
+			const accounts = loadAccounts();
+			const sessions = await createSessions(accounts);
+
+			// Find session matching target account
+			const targetSession = sessions.find(
+				(s) => String(s.actor) === options.account
+			);
+
+			if (!targetSession) {
+				generalLog.error('❌ No private key configured for account', {
+					account: options.account,
+					configuredAccounts: sessions.map((s) => String(s.actor))
+				});
+				console.error(`\nError: No private key configured for account '${options.account}'`);
+				console.error('Configured accounts:', sessions.map((s) => String(s.actor)).join(', '));
+				console.error('\nRun "scrapminer config" to see all configured accounts\n');
+				process.exit(1);
+			}
+
+			// Import and call generateDroplets
+			const { generateDroplets } = await import('./lib/operations');
+			const txIds = await generateDroplets(targetSession, amount, bound, {
+				data: options.data,
+				toNotify: options.notify,
+				dryRun
+			});
+
+			// Output results
+			if (txIds.length === 0 && options.dryRun) {
+				console.log('\n✅ Dry-run complete - no transactions broadcast\n');
+			} else if (txIds.length === 1) {
+				console.log(`\n✅ Generated ${amount} ${bound ? 'bound' : 'unbound'} droplets`);
+				console.log(`   Transaction: ${txIds[0]}\n`);
+			} else if (txIds.length > 1) {
+				console.log(`\n✅ Generated ${amount} ${bound ? 'bound' : 'unbound'} droplets in ${txIds.length} batches`);
+				console.log(`   Transactions: ${txIds.join(', ')}\n`);
+			}
+
+			process.exit(0);
+		} catch (error) {
+			generalLog.error('❌ Generate operation failed', {
+				error: error.message
+			});
+			console.error(`\nError: ${error.message}\n`);
 			process.exit(1);
 		}
 	}
