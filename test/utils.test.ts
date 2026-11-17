@@ -6,8 +6,14 @@
  */
 
 import { describe, test, expect, mock } from 'bun:test';
-import { objectify, isENVTrue, isENVFalse, discoverAccountsFromPrivateKey } from '../src/lib/utils';
-import { PrivateKey } from '@wharfkit/antelope';
+import {
+	objectify,
+	isENVTrue,
+	isENVFalse,
+	discoverAccountsFromPrivateKey,
+	discoverClaimAccounts
+} from '../src/lib/utils';
+import { Name, PrivateKey } from '@wharfkit/antelope';
 import type { APIClient } from '@wharfkit/antelope';
 
 describe('Utils: objectify()', () => {
@@ -340,5 +346,103 @@ describe('Utils: discoverAccountsFromPrivateKey()', () => {
 		expect(accounts[0].permission).toBe('active');
 		expect(typeof accounts[0].actor).toBe('string');
 		expect(typeof accounts[0].permission).toBe('string');
+	});
+});
+
+describe('Utils: discoverClaimAccounts()', () => {
+	const testPrivateKey = '5KQwrPbwdL6PhXujxW37FSSQZ1JiwsST4cqQzDeyXtP79zkvFD3';
+
+	const link = (account: string, action: string) => ({
+		account: Name.from(account),
+		action: Name.from(action)
+	});
+	const perm = (name: string, links: ReturnType<typeof link>[]) => ({
+		perm_name: Name.from(name),
+		linked_actions: links
+	});
+
+	function mockClient(
+		authorizers: Array<[string, string]>,
+		permissions: Record<string, ReturnType<typeof perm>[]>
+	) {
+		return {
+			v1: {
+				chain: {
+					get_accounts_by_authorizers: mock(() =>
+						Promise.resolve({
+							accounts: authorizers.map(([account_name, permission_name]) => ({
+								account_name,
+								permission_name
+							}))
+						})
+					),
+					get_account: mock((actor: string) =>
+						Promise.resolve({ permissions: permissions[String(actor)] ?? [] })
+					)
+				}
+			}
+		} as unknown as APIClient;
+	}
+
+	test('picks a custom-named permission linked to both claim actions', async () => {
+		const client = mockClient(
+			[
+				['gm', 'active'],
+				['gm', 'miner']
+			],
+			{
+				gm: [
+					perm('active', []),
+					perm('miner', [link('drops', 'destroy'), link('drops', 'generate')])
+				]
+			}
+		);
+		const accounts = await discoverClaimAccounts(testPrivateKey, client, 'drops');
+		expect(accounts.map((a) => `${a.actor}@${a.permission}`)).toEqual(['gm@miner']);
+	});
+
+	test('accepts a contract-wide link', async () => {
+		const client = mockClient([['alice', 'claim']], {
+			alice: [perm('claim', [link('drops', '')])]
+		});
+		const accounts = await discoverClaimAccounts(testPrivateKey, client, 'drops');
+		expect(accounts.map((a) => a.permission)).toEqual(['claim']);
+	});
+
+	test('skips permissions missing a claim link', async () => {
+		const client = mockClient([['alice', 'claim']], {
+			alice: [perm('claim', [link('drops', 'destroy')])]
+		});
+		expect(await discoverClaimAccounts(testPrivateKey, client, 'drops')).toEqual([]);
+	});
+
+	test('never uses owner or active', async () => {
+		const client = mockClient(
+			[
+				['alice', 'owner'],
+				['alice', 'active']
+			],
+			{
+				alice: [
+					perm('owner', [link('drops', '')]),
+					perm('active', [link('drops', 'destroy'), link('drops', 'generate')])
+				]
+			}
+		);
+		expect(await discoverClaimAccounts(testPrivateKey, client, 'drops')).toEqual([]);
+	});
+
+	test('keeps one permission per account', async () => {
+		const client = mockClient(
+			[
+				['alice', 'claim'],
+				['alice', 'miner']
+			],
+			{
+				alice: [perm('claim', [link('drops', '')]), perm('miner', [link('drops', '')])]
+			}
+		);
+		const accounts = await discoverClaimAccounts(testPrivateKey, client, 'drops');
+		expect(accounts).toHaveLength(1);
 	});
 });

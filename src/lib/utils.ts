@@ -97,3 +97,49 @@ export async function discoverAccountsFromPrivateKey(
 		throw new Error(`Failed to discover accounts from private key: ${error.message}`);
 	}
 }
+
+const CLAIM_ACTIONS = ['destroy', 'generate'];
+const PROTECTED_PERMISSIONS = ['owner', 'active'];
+
+export async function discoverClaimAccounts(
+	privkey: string,
+	client: APIClient,
+	contract: string
+): Promise<DiscoveredAccount[]> {
+	const candidates = (await discoverAccountsFromPrivateKey(privkey, client)).filter(
+		(acc) => !PROTECTED_PERMISSIONS.includes(acc.permission)
+	);
+
+	const byActor = new Map<string, DiscoveredAccount[]>();
+	for (const acc of candidates) {
+		byActor.set(acc.actor, [...(byActor.get(acc.actor) ?? []), acc]);
+	}
+
+	const result: DiscoveredAccount[] = [];
+	for (const [actor, perms] of byActor) {
+		const account = await client.v1.chain.get_account(actor);
+		const match = perms.find((candidate) => {
+			const permission = account.permissions.find((p) =>
+				p.perm_name.equals(candidate.permission)
+			);
+			const links = permission?.linked_actions ?? [];
+			return CLAIM_ACTIONS.every((action) =>
+				links.some(
+					(link) =>
+						link.account.equals(contract) &&
+						(link.action.equals(action) || link.action.equals(''))
+				)
+			);
+		});
+		if (match) {
+			result.push(match);
+		} else {
+			logger.debug('No permission linked to claim actions', {
+				actor,
+				permissions: perms.map((p) => p.permission)
+			});
+		}
+	}
+
+	return result;
+}

@@ -12,7 +12,7 @@ import type { AccountConfig } from './config';
 import { Contract as DropsContract } from './contracts/drops';
 import { Contract as ScrapContract } from './contracts/scrap';
 import { configLog } from './logger';
-import { discoverAccountsFromPrivateKey } from './utils';
+import { discoverClaimAccounts } from './utils';
 
 // Get chain configuration
 export const chain = Chains[CHAIN_NAME];
@@ -38,7 +38,7 @@ export const scrapContract = new ScrapContract({ client, account: scrapContractN
  * 1. Takes private keys from environment configuration
  * 2. Converts each private key to public key
  * 3. Queries blockchain to discover ALL account/permission pairs for each key
- * 4. Filters to only "claim" permissions
+ * 4. Keeps one permission per account that is linked to the claim actions (never owner/active)
  * 5. Creates Session objects for all discovered accounts
  *
  * A single private key may control multiple accounts - all will be claimed for.
@@ -54,15 +54,14 @@ export async function createSessions(accounts: AccountConfig[]): Promise<Session
 		});
 
 		try {
-			// Discover ALL accounts/permissions from private key (filtered to "claim" permission)
-			const discoveredAccounts = await discoverAccountsFromPrivateKey(
+			const discoveredAccounts = await discoverClaimAccounts(
 				account.privkey,
 				client,
-				'claim' // Only use "claim" permissions
+				contractName
 			);
 
 			if (discoveredAccounts.length === 0) {
-				configLog.warn('No accounts with "claim" permission found for private key', {
+				configLog.warn('No permission linked to the claim actions found for private key', {
 					keyIndex: i + 1
 				});
 				continue;

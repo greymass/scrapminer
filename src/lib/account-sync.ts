@@ -14,8 +14,8 @@ import { Session } from '@wharfkit/session';
 import { WalletPluginPrivateKey } from '@wharfkit/wallet-plugin-privatekey';
 import type { AccountConfig } from './config';
 import { configLog } from './logger';
-import { type DiscoveredAccount, discoverAccountsFromPrivateKey } from './utils';
-import { chain, client } from './wharf';
+import { type DiscoveredAccount, discoverClaimAccounts } from './utils';
+import { chain, client, contractName } from './wharf';
 
 /**
  * Account discovery result comparing old vs new state
@@ -32,13 +32,11 @@ export interface AccountSyncResult {
  *
  * @param accounts - Account configurations with private keys
  * @param currentSessions - Current active sessions
- * @param preferredPermission - Filter to only this permission (e.g., "claim")
  * @returns Sync result with added/removed/unchanged accounts
  */
 export async function syncAccounts(
 	accounts: AccountConfig[],
-	currentSessions: Session[],
-	preferredPermission = 'claim'
+	currentSessions: Session[]
 ): Promise<AccountSyncResult> {
 	configLog.debug('Starting account sync', {
 		privateKeys: accounts.length,
@@ -58,16 +56,12 @@ export async function syncAccounts(
 		const account = accounts[i];
 
 		try {
-			const discovered = await discoverAccountsFromPrivateKey(
-				account.privkey,
-				client,
-				preferredPermission
-			);
+			const discovered = await discoverClaimAccounts(account.privkey, client, contractName);
 
 			allDiscovered.push(...discovered);
 
 			if (discovered.length === 0) {
-				configLog.warn('No accounts with claim permission found', {
+				configLog.warn('No permission linked to the claim actions found', {
 					keyIndex: i + 1
 				});
 			}

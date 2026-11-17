@@ -125,7 +125,7 @@ export class ScrapMinerService {
 			});
 
 			// Discover current state of accounts
-			const syncResult = await syncAccounts(this.accounts, this.sessions, 'claim');
+			const syncResult = await syncAccounts(this.accounts, this.sessions);
 
 			if (!syncResult.hasChanges) {
 				configLog.debug('No account changes detected');

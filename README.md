@@ -12,7 +12,7 @@ Automatically claims SCRAP tokens from your Drops on EOS.
 
 ### 1. Permission Setup
 
-For security, create a dedicated `claim` permission on your account so this key can **only** claim drops - nothing else. Scrapminer has a built-in setup helper:
+Give the miner's key its own permission on your account, linked to `drops::destroy` and `drops::generate`, so the key can claim drops and do nothing else. The permission can have any name. Scrapminer has a built-in setup helper:
 
 ```bash
 bun install
@@ -31,7 +31,9 @@ Then run the setup command:
 bun src/index.ts setup --account <youraccountname>
 ```
 
-This checks your account's permissions and gives you a link to sign any missing setup steps through Unicove.
+This checks your account's permissions and gives you a link to sign any missing setup steps through Unicove. It creates a permission named `claim`; pass `--permission <name>` to use another name.
+
+If your account already has a permission linked to both actions (directly, or through a link to the whole `drops` contract), add your key to it and skip the setup command.
 
 ### 2. Configure
 
@@ -39,7 +41,7 @@ The defaults in `.env.example` work for most users. The only value you **must** 
 
 | Variable | Default | Description |
 |---|---|---|
-| `PRIVATE_KEY` | _(required)_ | Private key for your `claim` permission |
+| `PRIVATE_KEY` | _(required)_ | Private key for your claiming permission |
 | `DRY_RUN` | `true` | Set to `false` to actually broadcast transactions |
 | `AUTO_GENERATE` | `false` | Set to `true` to regenerate drops after claiming (maintains your drop count) |
 | `AUTO_RECLAIM` | `true` | Automatically re-claims after generating new drops |
@@ -85,7 +87,7 @@ The miner will sync your drops every hour and claim them every minute, running c
 
 ## Multi-Account Support
 
-Scrapminer auto-discovers **all** accounts your key can claim for. If your key controls `alice@claim` and `bob@claim`, both accounts are mined automatically - no extra configuration needed.
+Scrapminer auto-discovers **all** accounts your key can claim for. For each account that holds your key, it uses a permission linked to both `drops::destroy` and `drops::generate`, whatever its name. If your key is on `alice@claim` and `bob@miner`, and both are linked, the miner claims for both accounts with no extra configuration. An account with no linked permission for your key is skipped, and the miner logs a warning. The `config` command shows which `account@permission` pairs it found.
 
 For accounts with different keys, run separate instances with separate `.env` files:
 
@@ -104,7 +106,7 @@ bun build src/index.ts --compile --minify --outfile scrapminer
 
 ## Security
 
-**Always use a dedicated `claim` permission** - never put your `active` or `owner` key in this tool. The `setup` command creates a permission that can only call `drops::destroy` and `drops::generate`, so a compromised key cannot transfer tokens or change account settings.
+**Always use a dedicated claiming permission.** Keep your `active` and `owner` keys out of this tool; the miner never signs with those permissions, even when your key is on them. The `setup` command creates a permission that can only call `drops::destroy` and `drops::generate`, so a stolen key can't transfer tokens or change account settings.
 
 ## License
 
