@@ -6,12 +6,12 @@
 
 import { UInt64 } from '@wharfkit/antelope';
 import type { Session } from '@wharfkit/session';
-import { generalLog } from '../logger';
 import { buildDestroyAction } from '../actions/drops';
-import { executeTransactionOrThrow } from '../transaction';
-import { processBatches } from '../batch';
 import { fetchDropletIds } from '../api';
+import { processBatches } from '../batch';
 import type { Config } from '../config';
+import { generalLog } from '../logger';
+import { executeTransactionOrThrow } from '../transaction';
 
 /**
  * Validate and convert droplet IDs from strings to UInt64 array
@@ -72,26 +72,18 @@ export async function destroyDroplets(
 			ids,
 			async (batch, batchNum, totalBatches) => {
 				// Build destroy action
-				const action = buildDestroyAction(
-					session.actor,
-					batch,
-					{
-						memo: options.memo,
-						toNotify: options.toNotify
-					}
-				);
+				const action = buildDestroyAction(session.actor, batch, {
+					memo: options.memo,
+					toNotify: options.toNotify
+				});
 
 				// Execute transaction
-				const txId = await executeTransactionOrThrow(
-					session,
-					action,
-					{
-						broadcast: !options.dryRun,
-						logger: generalLog,
-						logContext: { batch: batchNum, totalBatches },
-						description: `Destroy batch ${batchNum}/${totalBatches} (${batch.length} droplets)`
-					}
-				);
+				const txId = await executeTransactionOrThrow(session, action, {
+					broadcast: !options.dryRun,
+					logger: generalLog,
+					logContext: { batch: batchNum, totalBatches },
+					description: `Destroy batch ${batchNum}/${totalBatches} (${batch.length} droplets)`
+				});
 
 				if (txId) {
 					txIds.push(txId);
@@ -150,15 +142,15 @@ export async function destroyDroplets(
 
 /**
  * Destroy a specified amount of droplets for an account
- * 
+ *
  * This is a convenience function that fetches droplet IDs from the API
  * and then calls destroyDroplets().
- * 
+ *
  * Note: This function queries the SCRAP API directly. It does not use
  * the local cache since it's typically called from CLI commands where
  * no cache exists (cache is only populated by the sync scheduler in
  * daemon mode).
- * 
+ *
  * @param session - Wharf session for the account
  * @param amount - Number of droplets to destroy
  * @param config - Configuration with API URL
@@ -189,7 +181,7 @@ export async function destroyDropletsByAmount(
 
 	// Fetch droplet IDs from API
 	const apiDroplets = await fetchDropletIds(account, config, amount);
-	
+
 	if (apiDroplets.length === 0) {
 		throw new Error(`No droplets found for account ${account}`);
 	}

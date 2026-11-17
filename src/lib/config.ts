@@ -6,13 +6,7 @@
  * is more complex and needs to be called at runtime.
  */
 
-import {
-	CHAIN_NAME,
-	CLAIM_BATCH_SIZE,
-	CLAIM_INTERVAL,
-	DRY_RUN,
-	SCRAP_API_URL
-} from '../config';
+import { CHAIN_NAME, CLAIM_BATCH_SIZE, CLAIM_INTERVAL, DRY_RUN, SCRAP_API_URL } from '../config';
 import { configLog } from './logger';
 
 export interface AccountConfig {

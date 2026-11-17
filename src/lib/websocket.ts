@@ -67,14 +67,14 @@ export class ScrapWebSocket {
 				websocketLog.debug('Connecting to SCRAP API websocket', { url: this.url });
 				this.ws = new WebSocket(this.url);
 
-			this.ws.addEventListener('open', () => {
-				websocketLog.info('🔌 Connected to SCRAP API');
-				// Send ping to verify connection
-				this.send({ command: 'ping' });
-				// Start heartbeat ping interval
-				this.startPingInterval();
-				resolve();
-			});
+				this.ws.addEventListener('open', () => {
+					websocketLog.info('🔌 Connected to SCRAP API');
+					// Send ping to verify connection
+					this.send({ command: 'ping' });
+					// Start heartbeat ping interval
+					this.startPingInterval();
+					resolve();
+				});
 
 				this.ws.addEventListener('message', (event) => {
 					this.handleMessage(event.data);
@@ -85,15 +85,15 @@ export class ScrapWebSocket {
 					reject(new Error('WebSocket connection error'));
 				});
 
-			this.ws.addEventListener('close', () => {
-				this.stopPingInterval();
-				if (this.shouldReconnect) {
-					websocketLog.warn('⚠️ Connection lost - reconnecting...');
-					this.scheduleReconnect();
-				} else {
-					websocketLog.debug('Websocket connection closed (no reconnect scheduled)');
-				}
-			});
+				this.ws.addEventListener('close', () => {
+					this.stopPingInterval();
+					if (this.shouldReconnect) {
+						websocketLog.warn('⚠️ Connection lost - reconnecting...');
+						this.scheduleReconnect();
+					} else {
+						websocketLog.debug('Websocket connection closed (no reconnect scheduled)');
+					}
+				});
 			} catch (error) {
 				websocketLog.error('Failed to create websocket connection', objectify({ error }));
 				reject(error);
@@ -141,7 +141,7 @@ export class ScrapWebSocket {
 					}
 				} else if (msg.status === 'complete') {
 					websocketLog.debug('Droplet streaming complete', { totalDroplets: msg.count });
-					
+
 					// Notify waiting sync operations
 					for (const [account, callback] of this.completionCallbacks.entries()) {
 						callback(msg.count);

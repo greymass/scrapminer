@@ -70,7 +70,7 @@ export async function getAccountDroplets(
 
 /**
  * Fetch actual droplet IDs for an account from the API
- * 
+ *
  * @param account - Account name
  * @param config - Configuration with API URL
  * @param limit - Maximum number of droplets to fetch (default: 5000)

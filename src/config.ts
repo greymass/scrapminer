@@ -79,7 +79,9 @@ if (DRY_RUN && !isSyncCommand && !isDestroyCommand && !isGenerateCommand) {
 
 // Warn for destroy/generate commands
 if (DRY_RUN && (isDestroyCommand || isGenerateCommand)) {
-	console.warn('⚠️  WARNING: DRY_RUN=true (transactions will not be broadcast unless --no-dry-run is specified)');
+	console.warn(
+		'⚠️  WARNING: DRY_RUN=true (transactions will not be broadcast unless --no-dry-run is specified)'
+	);
 }
 
 // ============================================================================

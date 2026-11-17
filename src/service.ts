@@ -21,8 +21,8 @@ import {
 	SYNC_TIMEOUT
 } from './config';
 import { applySyncResults, syncAccounts } from './lib/account-sync';
-import { claimFromCache } from './lib/claimer';
 import { dropletCache } from './lib/cache';
+import { claimFromCache } from './lib/claimer';
 import { type AccountConfig, loadAccounts, validateConfig } from './lib/config';
 import { claimerLog, configLog, generalLog, syncLog } from './lib/logger';
 import { syncAllAccounts } from './lib/sync';
@@ -108,7 +108,7 @@ export class ScrapMinerService {
 
 	/**
 	 * Account sync cycle - re-discovers accounts from private keys and updates session list
-	 * 
+	 *
 	 * This ensures the session list stays in sync with blockchain permission changes:
 	 * - Removes sessions for accounts that lost the claim permission
 	 * - Adds sessions for accounts that gained the claim permission
@@ -148,36 +148,36 @@ export class ScrapMinerService {
 				});
 			}
 
-		// Apply changes to session list
-		const sessionsBefore = this.sessions.length;
-		applySyncResults(this.sessions, this.accounts, syncResult);
+			// Apply changes to session list
+			const sessionsBefore = this.sessions.length;
+			applySyncResults(this.sessions, this.accounts, syncResult);
 
-		// Sync droplets for newly added accounts
-		if (syncResult.added.length > 0) {
-			configLog.debug('Syncing droplets for newly added accounts', {
-				count: syncResult.added.length
-			});
-
-			// Get the new sessions that were just added
-			const newSessions = this.sessions.slice(sessionsBefore);
-			
-			try {
-				const { syncAllAccounts } = await import('./lib/sync');
-				await syncAllAccounts(newSessions);
-			} catch (error) {
-				configLog.error('Failed to sync new accounts', {
-					error: error.message,
-					accounts: syncResult.added.map((a) => a.actor)
+			// Sync droplets for newly added accounts
+			if (syncResult.added.length > 0) {
+				configLog.debug('Syncing droplets for newly added accounts', {
+					count: syncResult.added.length
 				});
-			}
-		}
 
-		configLog.info('Account sync complete', {
-			previous: syncResult.unchanged.length + syncResult.removed.length,
-			current: this.sessions.length,
-			added: syncResult.added.length,
-			removed: syncResult.removed.length
-		});
+				// Get the new sessions that were just added
+				const newSessions = this.sessions.slice(sessionsBefore);
+
+				try {
+					const { syncAllAccounts } = await import('./lib/sync');
+					await syncAllAccounts(newSessions);
+				} catch (error) {
+					configLog.error('Failed to sync new accounts', {
+						error: error.message,
+						accounts: syncResult.added.map((a) => a.actor)
+					});
+				}
+			}
+
+			configLog.info('Account sync complete', {
+				previous: syncResult.unchanged.length + syncResult.removed.length,
+				current: this.sessions.length,
+				added: syncResult.added.length,
+				removed: syncResult.removed.length
+			});
 		} catch (error) {
 			configLog.error('Account sync failed', { error: error.message });
 		}
@@ -286,10 +286,15 @@ export class ScrapMinerService {
 
 			// Log discovered accounts
 			if (this.sessions) {
-				const accounts = this.sessions.map((s) => `${String(s.actor)}@${String(s.permission)}`);
-				generalLog.info(`📋 Monitoring ${accounts.length} account${accounts.length > 1 ? 's' : ''}`, {
-					accounts
-				});
+				const accounts = this.sessions.map(
+					(s) => `${String(s.actor)}@${String(s.permission)}`
+				);
+				generalLog.info(
+					`📋 Monitoring ${accounts.length} account${accounts.length > 1 ? 's' : ''}`,
+					{
+						accounts
+					}
+				);
 			}
 
 			// Initialize persistent websocket connection
@@ -470,8 +475,10 @@ export class ScrapMinerService {
 		// Suppress all winston logs by setting transports to silent
 		// This ensures only JSON is written to stdout (for piping)
 		const winston = await import('winston');
-		const { generalLog, configLog, syncLog, websocketLog, cacheLog } = await import('./lib/logger');
-		
+		const { generalLog, configLog, syncLog, websocketLog, cacheLog } = await import(
+			'./lib/logger'
+		);
+
 		const silentTransports = [new winston.transports.Console({ silent: true })];
 		generalLog.configure({ transports: silentTransports });
 		configLog.configure({ transports: silentTransports });
@@ -521,7 +528,7 @@ export class ScrapMinerService {
 				timestamp: new Date().toISOString(),
 				count: outputDroplets.length,
 				total: droplets.length,
-				droplets: outputDroplets.map(d => d._id)
+				droplets: outputDroplets.map((d) => d._id)
 			};
 
 			if (options.pretty) {
@@ -529,7 +536,7 @@ export class ScrapMinerService {
 			} else {
 				console.log(JSON.stringify(output));
 			}
-			
+
 			// Close websocket and exit cleanly
 			closeWebSocket();
 			process.exit(0);
@@ -556,8 +563,8 @@ export class ScrapMinerService {
 		const dryRun = options.noDryRun ? false : (options.dryRun ?? DRY_RUN);
 
 		const mode = options.droplets ? 'by-ids' : 'by-amount';
-		const count = options.droplets 
-			? options.droplets.split(',').length 
+		const count = options.droplets
+			? options.droplets.split(',').length
 			: Number(options.amount);
 
 		generalLog.info('🎯 Destroy mode: destroying droplets', {
@@ -573,17 +580,20 @@ export class ScrapMinerService {
 			const sessions = await createSessions(accounts);
 
 			// Find session matching target account
-			const targetSession = sessions.find(
-				(s) => String(s.actor) === options.account
-			);
+			const targetSession = sessions.find((s) => String(s.actor) === options.account);
 
 			if (!targetSession) {
 				generalLog.error('❌ No private key configured for account', {
 					account: options.account,
 					configuredAccounts: sessions.map((s) => String(s.actor))
 				});
-				console.error(`\nError: No private key configured for account '${options.account}'`);
-				console.error('Configured accounts:', sessions.map((s) => String(s.actor)).join(', '));
+				console.error(
+					`\nError: No private key configured for account '${options.account}'`
+				);
+				console.error(
+					'Configured accounts:',
+					sessions.map((s) => String(s.actor)).join(', ')
+				);
 				console.error('\nRun "scrapminer config" to see all configured accounts\n');
 				process.exit(1);
 			}
@@ -594,7 +604,7 @@ export class ScrapMinerService {
 			if (options.droplets) {
 				// Mode 1: Destroy specific droplet IDs
 				const dropletIds = options.droplets.split(',').map((id) => id.trim());
-				
+
 				const { destroyDroplets } = await import('./lib/operations');
 				txIds = await destroyDroplets(targetSession, dropletIds, {
 					memo: options.memo,
@@ -635,7 +645,9 @@ export class ScrapMinerService {
 				console.log(`\n✅ Destroyed ${dropletsDestroyed} droplets`);
 				console.log(`   Transaction: ${txIds[0]}\n`);
 			} else if (txIds.length > 1) {
-				console.log(`\n✅ Destroyed ${dropletsDestroyed} droplets in ${txIds.length} batches`);
+				console.log(
+					`\n✅ Destroyed ${dropletsDestroyed} droplets in ${txIds.length} batches`
+				);
 				console.log(`   Transactions: ${txIds.join(', ')}\n`);
 			}
 
@@ -690,17 +702,20 @@ export class ScrapMinerService {
 			const sessions = await createSessions(accounts);
 
 			// Find session matching target account
-			const targetSession = sessions.find(
-				(s) => String(s.actor) === options.account
-			);
+			const targetSession = sessions.find((s) => String(s.actor) === options.account);
 
 			if (!targetSession) {
 				generalLog.error('❌ No private key configured for account', {
 					account: options.account,
 					configuredAccounts: sessions.map((s) => String(s.actor))
 				});
-				console.error(`\nError: No private key configured for account '${options.account}'`);
-				console.error('Configured accounts:', sessions.map((s) => String(s.actor)).join(', '));
+				console.error(
+					`\nError: No private key configured for account '${options.account}'`
+				);
+				console.error(
+					'Configured accounts:',
+					sessions.map((s) => String(s.actor)).join(', ')
+				);
 				console.error('\nRun "scrapminer config" to see all configured accounts\n');
 				process.exit(1);
 			}
@@ -720,7 +735,9 @@ export class ScrapMinerService {
 				console.log(`\n✅ Generated ${amount} ${bound ? 'bound' : 'unbound'} droplets`);
 				console.log(`   Transaction: ${txIds[0]}\n`);
 			} else if (txIds.length > 1) {
-				console.log(`\n✅ Generated ${amount} ${bound ? 'bound' : 'unbound'} droplets in ${txIds.length} batches`);
+				console.log(
+					`\n✅ Generated ${amount} ${bound ? 'bound' : 'unbound'} droplets in ${txIds.length} batches`
+				);
 				console.log(`   Transactions: ${txIds.join(', ')}\n`);
 			}
 

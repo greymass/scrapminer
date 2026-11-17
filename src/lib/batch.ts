@@ -73,7 +73,7 @@ export interface BatchResult<R> {
  *   async (batch, batchNum, totalBatches) => {
  *     return await destroyDroplets(session, batch);
  *   },
- *   { 
+ *   {
  *     batchSize: 500,
  *     logger: myLogger,
  *     logContext: { account: 'myaccount' }
@@ -83,11 +83,7 @@ export interface BatchResult<R> {
  */
 export async function processBatches<T, R>(
 	items: T[],
-	processBatch: (
-		batch: T[],
-		batchNum: number,
-		totalBatches: number
-	) => Promise<R>,
+	processBatch: (batch: T[], batchNum: number, totalBatches: number) => Promise<R>,
 	config: BatchConfig = {}
 ): Promise<BatchResult<R>[]> {
 	const {
@@ -119,7 +115,7 @@ export async function processBatches<T, R>(
 
 		try {
 			const result = await processBatch(batch, batchNum, totalBatches);
-			
+
 			results.push({
 				batchNum,
 				result,

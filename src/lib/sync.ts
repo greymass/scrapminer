@@ -3,7 +3,7 @@
  *
  * Fetches valid/claimable droplets from SCRAP API websocket and stores in cache.
  * Runs periodically (hourly) and at startup.
- * 
+ *
  * Uses a singleton persistent websocket connection that stays open for the
  * lifetime of the application.
  */

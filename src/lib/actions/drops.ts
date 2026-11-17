@@ -8,8 +8,8 @@
 import { Bytes, Checksum256, Name, UInt32, UInt64 } from '@wharfkit/antelope';
 import type { Action } from '@wharfkit/session';
 import { SCRAP_CONTRACT } from '../../config';
-import { dropsContract } from '../wharf';
 import type { Droplet } from '../cache';
+import { dropsContract } from '../wharf';
 
 /**
  * Generate random name for droplet generation (mirrors scrap-ui implementation)
@@ -33,7 +33,7 @@ export function generateRandomHash(): string {
 
 /**
  * Build destroy action for droplets
- * 
+ *
  * @param owner - Account executing the action
  * @param dropletIds - Array of droplet IDs (strings or UInt64)
  * @param options - Optional parameters
@@ -48,23 +48,19 @@ export function buildDestroyAction(
 	} = {}
 ): Action {
 	// Convert to UInt64 if strings provided
-	const ids = dropletIds.map(id => 
-		typeof id === 'string' ? UInt64.from(id) : id
-	);
+	const ids = dropletIds.map((id) => (typeof id === 'string' ? UInt64.from(id) : id));
 
 	return dropsContract.action('destroy', {
 		owner,
 		droplet_ids: ids,
 		memo: options.memo || undefined,
-		to_notify: options.toNotify 
-			? Name.from(options.toNotify) 
-			: Name.from(SCRAP_CONTRACT) // Default: notify SCRAP contract
+		to_notify: options.toNotify ? Name.from(options.toNotify) : Name.from(SCRAP_CONTRACT) // Default: notify SCRAP contract
 	});
 }
 
 /**
  * Build generate action for droplets
- * 
+ *
  * @param owner - Account executing the action
  * @param amount - Number of droplets to generate
  * @param bound - Whether to generate bound or unbound droplets
@@ -88,18 +84,16 @@ export function buildGenerateAction(
 		bound,
 		amount: UInt32.from(amount),
 		data,
-		to_notify: options.toNotify 
-			? Name.from(options.toNotify) 
-			: undefined // No default notification for generate
+		to_notify: options.toNotify ? Name.from(options.toNotify) : undefined // No default notification for generate
 	});
 }
 
 /**
  * Build destroy + regenerate actions (for AUTO_GENERATE mode)
- * 
+ *
  * Separates bound/unbound droplets and creates appropriate generate actions.
  * Mirrors the scrap-ui implementation exactly.
- * 
+ *
  * @param owner - Account executing the actions
  * @param droplets - Array of droplets being destroyed
  * @param options - Optional parameters for destroy action
@@ -116,28 +110,24 @@ export function buildDestroyAndRegenerateActions(
 	// Build destroy action
 	const destroyAction = buildDestroyAction(
 		owner,
-		droplets.map(d => d._id),
+		droplets.map((d) => d._id),
 		options
 	);
 
 	const actions: Action[] = [destroyAction];
 
 	// Separate bound and unbound droplets
-	const boundDroplets = droplets.filter(d => d.bound === true);
-	const unboundDroplets = droplets.filter(d => d.bound === false);
+	const boundDroplets = droplets.filter((d) => d.bound === true);
+	const unboundDroplets = droplets.filter((d) => d.bound === false);
 
 	// Generate bound droplets if any were destroyed
 	if (boundDroplets.length > 0) {
-		actions.push(
-			buildGenerateAction(owner, boundDroplets.length, true)
-		);
+		actions.push(buildGenerateAction(owner, boundDroplets.length, true));
 	}
 
 	// Generate unbound droplets if any were destroyed
 	if (unboundDroplets.length > 0) {
-		actions.push(
-			buildGenerateAction(owner, unboundDroplets.length, false)
-		);
+		actions.push(buildGenerateAction(owner, unboundDroplets.length, false));
 	}
 
 	return actions;

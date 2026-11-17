@@ -5,10 +5,10 @@
  */
 
 import type { Session } from '@wharfkit/session';
-import { generalLog } from '../logger';
 import { buildGenerateAction } from '../actions/drops';
-import { executeTransactionOrThrow } from '../transaction';
 import { processBatches } from '../batch';
+import { generalLog } from '../logger';
+import { executeTransactionOrThrow } from '../transaction';
 
 /**
  * Validate amount is within reasonable limits
@@ -71,27 +71,18 @@ export async function generateDroplets(
 				const batchAmount = batch[0]; // Each batch item is just a number
 
 				// Build generate action
-				const action = buildGenerateAction(
-					session.actor,
-					batchAmount,
-					bound,
-					{
-						data: options.data,
-						toNotify: options.toNotify
-					}
-				);
+				const action = buildGenerateAction(session.actor, batchAmount, bound, {
+					data: options.data,
+					toNotify: options.toNotify
+				});
 
 				// Execute transaction
-				const txId = await executeTransactionOrThrow(
-					session,
-					action,
-					{
-						broadcast: !options.dryRun,
-						logger: generalLog,
-						logContext: { batch: batchNum, totalBatches },
-						description: `Generate batch ${batchNum}/${totalBatches} (${batchAmount} ${bound ? 'bound' : 'unbound'} droplets)`
-					}
-				);
+				const txId = await executeTransactionOrThrow(session, action, {
+					broadcast: !options.dryRun,
+					logger: generalLog,
+					logContext: { batch: batchNum, totalBatches },
+					description: `Generate batch ${batchNum}/${totalBatches} (${batchAmount} ${bound ? 'bound' : 'unbound'} droplets)`
+				});
 
 				if (txId) {
 					txIds.push(txId);
@@ -119,19 +110,25 @@ export async function generateDroplets(
 		// Summary message
 		if (txIds.length > 0) {
 			if (txIds.length === 1) {
-				generalLog.info(`✅ Generate complete - created ${amount} ${bound ? 'bound' : 'unbound'} droplets`, {
-					account,
-					amount,
-					bound,
-					txId: txIds[0]
-				});
+				generalLog.info(
+					`✅ Generate complete - created ${amount} ${bound ? 'bound' : 'unbound'} droplets`,
+					{
+						account,
+						amount,
+						bound,
+						txId: txIds[0]
+					}
+				);
 			} else {
-				generalLog.info(`✅ Generate complete - ${txIds.length} batches, ${amount} ${bound ? 'bound' : 'unbound'} droplets`, {
-					account,
-					amount,
-					bound,
-					txIds
-				});
+				generalLog.info(
+					`✅ Generate complete - ${txIds.length} batches, ${amount} ${bound ? 'bound' : 'unbound'} droplets`,
+					{
+						account,
+						amount,
+						bound,
+						txIds
+					}
+				);
 			}
 		} else if (options.dryRun) {
 			generalLog.info('✅ Generate dry-run complete', {

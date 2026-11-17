@@ -66,7 +66,7 @@ export interface TransactionExecutionResult {
  *     description: 'Destroy 500 droplets'
  *   }
  * );
- * 
+ *
  * if (result.success) {
  *   console.log('Transaction ID:', result.transactionId);
  * }
@@ -77,12 +77,7 @@ export async function executeTransaction(
 	actions: Action | Action[],
 	config: TransactionConfig = {}
 ): Promise<TransactionExecutionResult> {
-	const {
-		broadcast = true,
-		logger,
-		logContext = {},
-		description = 'transaction'
-	} = config;
+	const { broadcast = true, logger, logContext = {}, description = 'transaction' } = config;
 
 	const actionArray = Array.isArray(actions) ? actions : [actions];
 	const account = String(session.actor);
@@ -106,10 +101,7 @@ export async function executeTransaction(
 
 	try {
 		// Execute transaction with broadcast flag
-		const result = await session.transact(
-			{ actions: actionArray },
-			{ broadcast }
-		);
+		const result = await session.transact({ actions: actionArray }, { broadcast });
 
 		const txId = String(result.response?.transaction_id || '');
 
